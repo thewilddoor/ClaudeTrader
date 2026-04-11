@@ -2374,3 +2374,10 @@ Expected: All tests PASSED. Minimum coverage targets:
 | `TELEGRAM_BOT_TOKEN` | Telegram BotFather (`/newbot`) |
 | `TELEGRAM_CHAT_ID` | Send a message to your bot, then: `https://api.telegram.org/bot<TOKEN>/getUpdates` |
 | `ANTHROPIC_API_KEY` | console.anthropic.com |
+
+ALPACA_API_KEY = your_alpaca_api_key_here
+ALPACA_SECRET_KEY = your_alpaca_secret_key_here
+FMP_API_KEY = your_fmp_api_key_here
+TELEGRAM_BOT_TOKEN = your_telegram_bot_token_here
+TELEGRAM_CHAT_ID = 5807615607
+ANTHROPIC_API_KEY = your_anthropic_api_key_here
