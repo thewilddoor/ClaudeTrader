@@ -209,6 +209,14 @@ class LettaTraderAgent:
             Block(label="today_context", value=INITIAL_TODAY_CONTEXT, limit=2000),
         ])
 
+        # Pass API keys so Letta's tool executor subprocess can call external APIs
+        _env_keys = [
+            "FMP_API_KEY", "SERPER_API_KEY",
+            "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL",
+            "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
+        ]
+        tool_env = {k: os.environ[k] for k in _env_keys if k in os.environ}
+
         agent = client.create_agent(
             name=agent_name,
             llm_config={
@@ -218,5 +226,6 @@ class LettaTraderAgent:
                 "context_window": 200000,
             },
             memory=memory,
+            tool_exec_environment_variables=tool_env,
         )
         return cls(agent_id=agent.id, server_url=url)

@@ -10,11 +10,15 @@ def run_script(
     timeout: int = 30,
     scripts_dir: Optional[str] = None,
 ) -> dict:
-    """
-    Execute a Python script in a sandboxed subprocess.
-    Returns dict: {stdout, stderr, returncode, error}
-    Constraints: timeout enforced, no network access (OS-level firewall on VPS),
-    memory limited to 256MB via ulimit.
+    """Execute a Python script in a sandboxed subprocess.
+
+    Args:
+        code: Python source code to execute as a string.
+        timeout: Maximum execution time in seconds before the process is killed (default 30).
+        scripts_dir: Path to the scripts directory added to PYTHONPATH (reads from SCRIPTS_DIR env var).
+
+    Returns:
+        dict: Execution result with 'stdout', 'stderr', 'returncode', and 'error' keys.
     """
     scripts_dir = scripts_dir or os.environ.get("SCRIPTS_DIR", "/app/scripts")
 

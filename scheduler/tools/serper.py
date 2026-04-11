@@ -11,10 +11,16 @@ def serper_search(
     num: int = 10,
     api_key: Optional[str] = None,
 ) -> dict:
-    """
-    Search the web via Serper (Google Search API).
-    search_type: 'search' for general, 'news' for news results.
-    Returns dict with 'organic' (search) or 'news' (news) list.
+    """Search the web via Serper (Google Search API).
+
+    Args:
+        query: Search query string (e.g. 'AAPL earnings report Q1 2026').
+        search_type: Type of search; 'search' for general web results, 'news' for news.
+        num: Number of results to return (default 10).
+        api_key: Serper API key; reads from SERPER_API_KEY env var if not provided.
+
+    Returns:
+        dict: Search results with 'organic' list (search) or 'news' list (news type).
     """
     api_key = api_key or os.environ["SERPER_API_KEY"]
     response = requests.post(
