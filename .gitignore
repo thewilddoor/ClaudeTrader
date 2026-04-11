@@ -9,3 +9,11 @@ logs/errors/
 dist/
 .DS_Store
 letta-db/
+venv/
+.venv/
+env/
+build/
+.mypy_cache/
+*.log
+.coverage
+htmlcov/
