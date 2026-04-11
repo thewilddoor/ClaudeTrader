@@ -1,0 +1,37 @@
+version: "3.9"
+
+services:
+  letta:
+    image: letta/letta:latest
+    ports:
+      - "8283:8283"
+    volumes:
+      - letta-db:/root/.letta
+    environment:
+      - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
+    restart: unless-stopped
+
+  alpaca-mcp:
+    image: ghcr.io/alpacahq/alpaca-mcp-server:latest
+    environment:
+      - ALPACA_API_KEY=${ALPACA_API_KEY}
+      - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
+      - ALPACA_BASE_URL=${ALPACA_BASE_URL}
+    ports:
+      - "8000:8000"
+    restart: unless-stopped
+
+  scheduler:
+    build: .
+    volumes:
+      - ./scripts:/app/scripts
+      - ./logs:/app/logs
+    env_file:
+      - .env
+    depends_on:
+      - letta
+      - alpaca-mcp
+    restart: unless-stopped
+
+volumes:
+  letta-db:

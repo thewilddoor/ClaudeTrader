@@ -1,0 +1,11 @@
+.env
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+logs/sessions/
+logs/errors/
+*.egg-info/
+dist/
+.DS_Store
+letta-db/
