@@ -1,0 +1,19 @@
+{
+  "indicators": {
+    "rsi": {"path": "indicators/momentum/rsi.py", "inputs": "ohlcv_list", "args": "--period INT(14)", "created": "2026-04-10", "notes": "Reliable in ranging markets. >70 overbought, <30 oversold."},
+    "macd": {"path": "indicators/momentum/macd.py", "inputs": "ohlcv_list", "args": "--fast INT(12) --slow INT(26) --signal INT(9)", "created": "2026-04-10", "notes": "Trend and momentum. Watch crossover field."},
+    "rate_of_change": {"path": "indicators/momentum/rate_of_change.py", "inputs": "ohlcv_list", "args": "--period INT(10)", "created": "2026-04-10", "notes": "Price momentum over N periods."},
+    "atr": {"path": "indicators/volatility/atr.py", "inputs": "ohlcv_list", "args": "--period INT(14)", "created": "2026-04-10", "notes": "Use atr_pct for stop-loss sizing (e.g., 1.5x ATR%)."},
+    "bollinger_bands": {"path": "indicators/volatility/bollinger_bands.py", "inputs": "ohlcv_list", "args": "--period INT(20) --std FLOAT(2.0)", "created": "2026-04-10", "notes": "Squeeze (low bandwidth) often precedes breakout."},
+    "vix_percentile": {"path": "indicators/volatility/vix_percentile.py", "inputs": "vix_close_list", "args": "none", "created": "2026-04-10", "notes": "Run with VIX OHLCV data. Regime: low<15, normal 15-25, elevated 25-40, extreme>40."},
+    "ema_crossover": {"path": "indicators/trend/ema_crossover.py", "inputs": "ohlcv_list", "args": "--fast INT(9) --slow INT(21)", "created": "2026-04-10", "notes": "Primary trend filter. crossover_today=true is the signal."},
+    "adx_trend_strength": {"path": "indicators/trend/adx_trend_strength.py", "inputs": "ohlcv_list", "args": "--period INT(14)", "created": "2026-04-10", "notes": "ADX>25 = strong trend. Use to filter momentum trades."},
+    "supertrend": {"path": "indicators/trend/supertrend.py", "inputs": "ohlcv_list", "args": "--period INT(10) --multiplier FLOAT(3.0)", "created": "2026-04-10", "notes": "Dynamic support/resistance and trend signal."},
+    "vwap": {"path": "indicators/volume/vwap.py", "inputs": "ohlcv_list", "args": "none", "created": "2026-04-10", "notes": "Use as dynamic S/R level and entry filter."},
+    "obv": {"path": "indicators/volume/obv.py", "inputs": "ohlcv_list", "args": "none", "created": "2026-04-10", "notes": "obv_divergence=true is a reversal warning."},
+    "volume_profile": {"path": "indicators/volume/volume_profile.py", "inputs": "ohlcv_list", "args": "--bins INT(10)", "created": "2026-04-10", "notes": "POC = Point of Control (highest volume price). Use for S/R."},
+    "market_regime_detector": {"path": "indicators/composite/market_regime_detector.py", "inputs": "{spy: ohlcv_list, vix: ohlcv_list}", "args": "none", "created": "2026-04-10", "notes": "Run pre-market daily. Regime drives strategy adaptation."},
+    "relative_strength_scanner": {"path": "indicators/composite/relative_strength_scanner.py", "inputs": "{TICKER: [{date, close}], ...}", "args": "none", "created": "2026-04-10", "notes": "Pass candidate tickers, returns ranked list by RS score."}
+  },
+  "analysis": {}
+}
