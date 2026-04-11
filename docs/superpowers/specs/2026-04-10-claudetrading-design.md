@@ -49,7 +49,7 @@ ClaudeTrading is an autonomous AI trading system powered by Claude (via Letta), 
 - **APScheduler** — Python scheduler triggering sessions via dynamic prompt injection
 - **FMP** — Financial Modeling Prep API for fundamentals, screener, technicals, earnings
 - **Serper** — Google Search API for news, macro events, company research
-- **PyExec** — sandboxed Python subprocess execution for indicator scripts and analysis
+- **PyExec** — sandboxed Python subprocess execution for indicator scripts and analysis (resource-limited: CPU/memory caps, no network access, restricted imports)
 - **Telegram** — event-driven notifications (not a Claude tool — fired by scheduler)
 - **Docker Compose** — single-command VPS deployment, auto-restart on crash
 
@@ -57,7 +57,7 @@ ClaudeTrading is an autonomous AI trading system powered by Claude (via Letta), 
 
 ## 3. Session Schedule
 
-Five APScheduler triggers. Each sends a minimal **dynamic prompt injection** — not full instructions, just a session type + fresh real-time context. Claude reads its memory and determines what to do. Session responsibilities live in its strategy doc, not in prompts.
+Five recurring APScheduler triggers plus one manual bootstrap trigger (first-run only, see Section 6). Each scheduled trigger sends a minimal **dynamic prompt injection** — not full instructions, just a session type + fresh real-time context. Claude reads its memory and determines what to do. Session responsibilities live in its strategy doc, not in prompts.
 
 ```python
 # Example injections
@@ -346,7 +346,7 @@ Each session runs inside a scheduler-level try/except wrapper. Claude only sees 
 
 ## 8. Telegram Notifications
 
-Event-driven from the scheduler. Not a Claude tool — Claude does not call Telegram directly. The scheduler fires notifications based on session outcomes and error states.
+Event-driven from the scheduler. Not a Claude tool — Claude does not call Telegram directly. At the end of each session, Claude emits a structured JSON summary as its final message (e.g., trades executed, lesson learned, strategy change). The scheduler parses this output and formats it into Telegram messages. Error notifications are fired by the scheduler's try/except wrapper independently of Claude.
 
 ```
 📈 TRADE EXECUTED
