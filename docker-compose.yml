@@ -27,7 +27,7 @@ services:
       - "8000:8000"
     restart: unless-stopped
     healthcheck:
-      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ 2>/dev/null | head -c1 | grep -q . || exit 1"]
+      test: ["CMD-SHELL", "python3 -c \"import socket; socket.create_connection(('localhost', 8000), timeout=3)\" 2>/dev/null || exit 1"]
       interval: 10s
       timeout: 5s
       retries: 10
