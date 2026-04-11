@@ -16,7 +16,9 @@ services:
       start_period: 30s
 
   alpaca-mcp:
-    image: ghcr.io/alpacahq/alpaca-mcp-server:latest
+    build:
+      context: .
+      dockerfile: docker/alpaca-mcp/Dockerfile
     environment:
       - ALPACA_API_KEY=${ALPACA_API_KEY}
       - ALPACA_SECRET_KEY=${ALPACA_SECRET_KEY}
