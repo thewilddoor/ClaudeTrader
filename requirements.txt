@@ -3,7 +3,6 @@ apscheduler>=3.10.4
 requests>=2.31.0
 python-telegram-bot>=20.7
 pandas>=2.1.0
-pandas-ta>=0.3.14b
 numpy>=1.26.0
 pytest>=7.4.0
 pytest-mock>=3.12.0
