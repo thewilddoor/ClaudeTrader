@@ -9,7 +9,7 @@ from pathlib import Path
 from scheduler.agent import LettaTraderAgent
 from scheduler.tools.registry import register_all_tools, attach_alpaca_mcp
 
-AGENT_ID_FILE = Path("/app/.agent_id")
+AGENT_ID_FILE = Path("/app/state/.agent_id")
 
 
 def bootstrap():

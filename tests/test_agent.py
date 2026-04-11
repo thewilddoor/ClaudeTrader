@@ -7,15 +7,20 @@ def test_agent_sends_message_and_returns_response():
     with patch("scheduler.agent.create_client") as mock_create:
         mock_client = MagicMock()
         mock_create.return_value = mock_client
+
+        # letta_client AssistantMessage uses .content (str), not .text
+        mock_msg = MagicMock()
+        mock_msg.message_type = "assistant_message"
+        mock_msg.content = '{"status": "ok", "trades": []}'
         mock_response = MagicMock()
-        mock_response.messages = [MagicMock(text='{"status": "ok", "trades": []}')]
+        mock_response.messages = [mock_msg]
         mock_client.send_message.return_value = mock_response
 
         agent = LettaTraderAgent(agent_id="test-agent-id")
         result = agent.send_session("SESSION: market_open | DATE: 2026-04-10")
 
         mock_client.send_message.assert_called_once()
-        assert result is not None
+        assert result == '{"status": "ok", "trades": []}'
 
 
 def test_agent_get_core_memory_block():

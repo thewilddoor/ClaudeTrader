@@ -31,7 +31,7 @@ from scheduler.notifier import (
 )
 
 ET = ZoneInfo("America/New_York")
-AGENT_ID_FILE = Path("/app/.agent_id")
+AGENT_ID_FILE = Path("/app/state/.agent_id")
 SESSION_TIMEOUT = 900  # 15 minutes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")

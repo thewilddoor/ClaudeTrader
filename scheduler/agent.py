@@ -14,7 +14,6 @@ from typing import Optional
 from letta_client import Letta
 from letta.schemas.memory import BasicBlockMemory
 from letta.schemas.block import Block
-from letta.schemas.llm_config import LLMConfig
 
 
 # ---------------------------------------------------------------------------
@@ -158,17 +157,28 @@ class LettaTraderAgent:
         )
 
     def send_session(self, prompt: str) -> str:
-        """Send a session prompt to the agent and return the last message text."""
+        """Send a session prompt to the agent and return the last assistant message text.
+
+        letta_client AssistantMessage uses .content (str or list of content parts),
+        not .text. Content parts (LettaAssistantMessageContentUnion) each have .text.
+        """
         response = self.client.send_message(
             agent_id=self.agent_id,
             message=prompt,
             role="user",
         )
-        texts = [
-            m.text
-            for m in response.messages
-            if hasattr(m, "text") and m.text
-        ]
+        texts = []
+        for m in response.messages:
+            if getattr(m, "message_type", None) != "assistant_message":
+                continue
+            content = getattr(m, "content", None)
+            if isinstance(content, str) and content:
+                texts.append(content)
+            elif isinstance(content, list):
+                for part in content:
+                    text = getattr(part, "text", None)
+                    if text:
+                        texts.append(text)
         return texts[-1] if texts else ""
 
     def get_memory_block(self, block_name: str) -> Optional[str]:
@@ -201,12 +211,12 @@ class LettaTraderAgent:
 
         agent = client.create_agent(
             name=agent_name,
-            llm_config=LLMConfig(
-                model="claude-sonnet-4-6",
-                model_endpoint_type="anthropic",
-                model_endpoint="https://api.anthropic.com/v1",
-                context_window=200000,
-            ),
+            llm_config={
+                "model": "claude-sonnet-4-6",
+                "model_endpoint_type": "anthropic",
+                "model_endpoint": "https://api.anthropic.com/v1",
+                "context_window": 200000,
+            },
             memory=memory,
         )
         return cls(agent_id=agent.id, server_url=url)

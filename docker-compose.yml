@@ -9,10 +9,11 @@ services:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     restart: unless-stopped
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8283/health"]
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8283/v1/health || exit 1"]
       interval: 10s
       timeout: 5s
-      retries: 5
+      retries: 10
+      start_period: 30s
 
   alpaca-mcp:
     image: ghcr.io/alpacahq/alpaca-mcp-server:latest
@@ -23,20 +24,28 @@ services:
     ports:
       - "8000:8000"
     restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8000/ 2>/dev/null | head -c1 | grep -q . || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 15s
 
   scheduler:
     build: .
     volumes:
       - ./scripts:/app/scripts
       - ./logs:/app/logs
+      - agent-state:/app/state
     env_file:
       - .env
     depends_on:
       letta:
         condition: service_healthy
       alpaca-mcp:
-        condition: service_started
+        condition: service_healthy
     restart: unless-stopped
 
 volumes:
   letta-db:
+  agent-state:
