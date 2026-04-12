@@ -315,13 +315,13 @@ def check_probation(agent) -> Optional[dict]:
         updated_doc = current_doc.replace("status: probationary", "status: confirmed")
         agent.update_memory_block("strategy_doc", updated_doc)
 
-        # Phase 3: DB commit
+        # Phase 3: DB commit — also update doc_text so revert to this version restores confirmed text
         conn = _connect()
         try:
             conn.execute(
-                "UPDATE strategy_versions SET status='confirmed', resolved_at=datetime('now') "
-                "WHERE version=?",
-                (version,),
+                "UPDATE strategy_versions SET status='confirmed', resolved_at=datetime('now'), "
+                "doc_text=? WHERE version=?",
+                (updated_doc, version),
             )
             conn.commit()
         finally:

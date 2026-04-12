@@ -149,9 +149,13 @@ def run_session(session_type: str, prompt: str, max_retries: int = 1):
                     post_version = _extract_strategy_version(post_doc)
                     if post_version and post_version != pre_version:
                         try:
+                            # Strip existing metadata block so apply_change doesn't produce double headers
+                            post_doc_body = re.sub(
+                                r'^## Version metadata\n(?:[^\n]+\n)*\n', '', post_doc, flags=re.MULTILINE
+                            )
                             strategy_gate.apply_change(
                                 agent,
-                                {"description": "direct write detected", "new_strategy_doc": post_doc},
+                                {"description": "direct write detected", "new_strategy_doc": post_doc_body},
                             )
                             send_telegram(format_bypass_alert(post_version))
                         except strategy_gate.StrategyGateError as e:
