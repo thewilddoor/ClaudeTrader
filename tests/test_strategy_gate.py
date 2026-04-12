@@ -12,7 +12,6 @@ import scheduler.strategy_gate as gate_mod
 def db(tmp_path, monkeypatch):
     db_path = str(tmp_path / "trades.db")
     monkeypatch.setattr(sqlite_mod, "DB_PATH", db_path)
-    monkeypatch.setattr(gate_mod, "DB_PATH", db_path)
     sqlite_mod.bootstrap_db()
     return db_path
 

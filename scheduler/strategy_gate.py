@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
 
-from scheduler.tools.sqlite import _connect, DB_PATH, _BLOCKED_KEYWORDS
+from scheduler.tools.sqlite import _connect, _BLOCKED_KEYWORDS
 
 log = logging.getLogger(__name__)
 
