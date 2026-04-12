@@ -248,8 +248,11 @@ def check_probation(agent) -> Optional[dict]:
     Returns a dict on promotion or reversion:
       {outcome, version, trade_count, new_win_rate, new_avg_r,
        baseline_win_rate, baseline_avg_r, revert_reason}
+
+    Letta write precedes DB commit in both paths — mirrors apply_change's ordering guarantee.
     """
-    conn = _connect()
+    # Phase 1: read all DB data needed for the decision (read-only; closed before Letta I/O)
+    conn = _connect(read_only=True)
     try:
         prob_row = conn.execute(
             "SELECT version, baseline_win_rate, baseline_avg_r, promote_after "
@@ -295,56 +298,73 @@ def check_probation(agent) -> Optional[dict]:
             and (baseline_ar - new_ar) > REVERT_AVG_R_DROP_THRESHOLD
         )
 
-        if not wr_degraded and not ar_degraded:
+        # Fetch confirmed doc now for the reversion path (before closing connection)
+        confirmed_doc: Optional[str] = None
+        if wr_degraded or ar_degraded:
+            confirmed_row = conn.execute(
+                "SELECT doc_text FROM strategy_versions "
+                "WHERE status='confirmed' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            confirmed_doc = confirmed_row["doc_text"] if confirmed_row else None
+    finally:
+        conn.close()
+
+    if not wr_degraded and not ar_degraded:
+        # Phase 2: Letta write (promotion — before DB commit)
+        current_doc = str(agent.get_memory_block("strategy_doc") or "")
+        updated_doc = current_doc.replace("status: probationary", "status: confirmed")
+        agent.update_memory_block("strategy_doc", updated_doc)
+
+        # Phase 3: DB commit
+        conn = _connect()
+        try:
             conn.execute(
                 "UPDATE strategy_versions SET status='confirmed', resolved_at=datetime('now') "
                 "WHERE version=?",
                 (version,),
             )
             conn.commit()
+        finally:
+            conn.close()
 
-            current_doc = agent.get_memory_block("strategy_doc") or ""
-            updated_doc = current_doc.replace("status: probationary", "status: confirmed")
-            agent.update_memory_block("strategy_doc", updated_doc)
+        return {
+            "outcome": "promoted", "version": version, "trade_count": trade_count,
+            "new_win_rate": new_wr, "new_avg_r": new_ar,
+            "baseline_win_rate": baseline_wr, "baseline_avg_r": baseline_ar,
+            "revert_reason": None,
+        }
+    else:
+        reasons = []
+        if wr_degraded:
+            reasons.append(f"win rate dropped {baseline_wr:.1f}% → {new_wr:.1f}%")
+        if ar_degraded:
+            reasons.append(f"avg R dropped {baseline_ar:.2f} → {new_ar:.2f}")
+        revert_reason = "; ".join(reasons)
 
-            return {
-                "outcome": "promoted", "version": version, "trade_count": trade_count,
-                "new_win_rate": new_wr, "new_avg_r": new_ar,
-                "baseline_win_rate": baseline_wr, "baseline_avg_r": baseline_ar,
-                "revert_reason": None,
-            }
-        else:
-            reasons = []
-            if wr_degraded:
-                reasons.append(f"win rate dropped {baseline_wr:.1f}% → {new_wr:.1f}%")
-            if ar_degraded:
-                reasons.append(f"avg R dropped {baseline_ar:.2f} → {new_ar:.2f}")
-            revert_reason = "; ".join(reasons)
+        # Phase 2: Letta write (reversion — before DB commit)
+        if confirmed_doc is not None:
+            agent.update_memory_block("strategy_doc", confirmed_doc)
 
+        # Phase 3: DB commit
+        conn = _connect()
+        try:
             conn.execute(
                 "UPDATE strategy_versions SET status='reverted', resolved_at=datetime('now'), "
                 "revert_reason=? WHERE version=?",
                 (revert_reason, version),
             )
             conn.commit()
+        finally:
+            conn.close()
 
-            confirmed_row = conn.execute(
-                "SELECT doc_text FROM strategy_versions "
-                "WHERE status='confirmed' ORDER BY created_at DESC LIMIT 1"
-            ).fetchone()
-            if confirmed_row:
-                agent.update_memory_block("strategy_doc", confirmed_row["doc_text"])
+        _append_feedback(
+            f"Strategy {version} was automatically reverted after {trade_count} trades. "
+            f"{revert_reason.capitalize()}. Previous confirmed version restored."
+        )
 
-            _append_feedback(
-                f"Strategy {version} was automatically reverted after {trade_count} trades. "
-                f"{revert_reason.capitalize()}. Previous confirmed version restored."
-            )
-
-            return {
-                "outcome": "reverted", "version": version, "trade_count": trade_count,
-                "new_win_rate": new_wr, "new_avg_r": new_ar,
-                "baseline_win_rate": baseline_wr, "baseline_avg_r": baseline_ar,
-                "revert_reason": revert_reason,
-            }
-    finally:
-        conn.close()
+        return {
+            "outcome": "reverted", "version": version, "trade_count": trade_count,
+            "new_win_rate": new_wr, "new_avg_r": new_ar,
+            "baseline_win_rate": baseline_wr, "baseline_avg_r": baseline_ar,
+            "revert_reason": revert_reason,
+        }
