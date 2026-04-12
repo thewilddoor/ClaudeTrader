@@ -237,3 +237,114 @@ def apply_change(agent, proposed_change: dict) -> dict:
         conn.close()
 
     return {"version": new_version, "promote_after": promote_after, "description": description}
+
+
+def check_probation(agent) -> Optional[dict]:
+    """
+    Evaluate the active probationary strategy version if it has enough closed trades.
+
+    Returns None if no probationary version or trade count < promote_after.
+
+    Returns a dict on promotion or reversion:
+      {outcome, version, trade_count, new_win_rate, new_avg_r,
+       baseline_win_rate, baseline_avg_r, revert_reason}
+    """
+    conn = _connect()
+    try:
+        prob_row = conn.execute(
+            "SELECT version, baseline_win_rate, baseline_avg_r, promote_after "
+            "FROM strategy_versions WHERE status = 'probationary' "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if prob_row is None:
+            return None
+
+        version = prob_row["version"]
+        baseline_wr = prob_row["baseline_win_rate"]
+        baseline_ar = prob_row["baseline_avg_r"]
+        promote_after = prob_row["promote_after"]
+
+        trade_count = conn.execute(
+            "SELECT COUNT(*) AS n FROM trades "
+            "WHERE strategy_version = ? AND closed_at IS NOT NULL",
+            (version,),
+        ).fetchone()["n"]
+
+        if trade_count < promote_after:
+            return None
+
+        metrics = conn.execute(
+            """
+            SELECT
+                AVG(CASE WHEN outcome_pnl > 0 THEN 100.0 ELSE 0.0 END) AS win_rate,
+                AVG(r_multiple)                                          AS avg_r
+            FROM trades
+            WHERE strategy_version = ? AND closed_at IS NOT NULL
+            """,
+            (version,),
+        ).fetchone()
+        new_wr = metrics["win_rate"]
+        new_ar = metrics["avg_r"]
+
+        wr_degraded = (
+            baseline_wr is not None and new_wr is not None
+            and (baseline_wr - new_wr) > REVERT_WIN_RATE_DROP_THRESHOLD
+        )
+        ar_degraded = (
+            baseline_ar is not None and new_ar is not None
+            and (baseline_ar - new_ar) > REVERT_AVG_R_DROP_THRESHOLD
+        )
+
+        if not wr_degraded and not ar_degraded:
+            conn.execute(
+                "UPDATE strategy_versions SET status='confirmed', resolved_at=datetime('now') "
+                "WHERE version=?",
+                (version,),
+            )
+            conn.commit()
+
+            current_doc = agent.get_memory_block("strategy_doc") or ""
+            updated_doc = current_doc.replace("status: probationary", "status: confirmed")
+            agent.update_memory_block("strategy_doc", updated_doc)
+
+            return {
+                "outcome": "promoted", "version": version, "trade_count": trade_count,
+                "new_win_rate": new_wr, "new_avg_r": new_ar,
+                "baseline_win_rate": baseline_wr, "baseline_avg_r": baseline_ar,
+                "revert_reason": None,
+            }
+        else:
+            reasons = []
+            if wr_degraded:
+                reasons.append(f"win rate dropped {baseline_wr:.1f}% → {new_wr:.1f}%")
+            if ar_degraded:
+                reasons.append(f"avg R dropped {baseline_ar:.2f} → {new_ar:.2f}")
+            revert_reason = "; ".join(reasons)
+
+            conn.execute(
+                "UPDATE strategy_versions SET status='reverted', resolved_at=datetime('now'), "
+                "revert_reason=? WHERE version=?",
+                (revert_reason, version),
+            )
+            conn.commit()
+
+            confirmed_row = conn.execute(
+                "SELECT doc_text FROM strategy_versions "
+                "WHERE status='confirmed' ORDER BY created_at DESC LIMIT 1"
+            ).fetchone()
+            if confirmed_row:
+                agent.update_memory_block("strategy_doc", confirmed_row["doc_text"])
+
+            _append_feedback(
+                f"Strategy {version} was automatically reverted after {trade_count} trades. "
+                f"{revert_reason.capitalize()}. Previous confirmed version restored."
+            )
+
+            return {
+                "outcome": "reverted", "version": version, "trade_count": trade_count,
+                "new_win_rate": new_wr, "new_avg_r": new_ar,
+                "baseline_win_rate": baseline_wr, "baseline_avg_r": baseline_ar,
+                "revert_reason": revert_reason,
+            }
+    finally:
+        conn.close()

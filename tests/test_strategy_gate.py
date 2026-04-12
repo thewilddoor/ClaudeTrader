@@ -219,3 +219,114 @@ def test_apply_change_inserts_probationary_row_in_db(db):
     assert row is not None
     assert row["status"] == "probationary"
     assert "body" in row["doc_text"]
+
+
+# --- check_probation ---
+
+def test_check_probation_returns_none_with_no_probationary_version(db):
+    _insert_version(db, "v1", "confirmed")
+    assert gate_mod.check_probation(Mock()) is None
+
+
+def test_check_probation_returns_none_when_not_enough_trades(db):
+    _insert_version(db, "v1", "confirmed")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO strategy_versions (version, status, doc_text, "
+        "baseline_win_rate, baseline_avg_r, promote_after) "
+        "VALUES ('v2', 'probationary', 'doc', 55.0, 1.4, 10)"
+    )
+    conn.commit()
+    conn.close()
+    for _ in range(5):
+        _insert_closed_trade(db, r_multiple=1.0, outcome_pnl=100, version="v2")
+
+    assert gate_mod.check_probation(Mock()) is None
+
+
+def test_check_probation_promotes_when_performance_holds(db):
+    _insert_version(db, "v1", "confirmed")
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO strategy_versions (version, status, doc_text, "
+        "baseline_win_rate, baseline_avg_r, promote_after) "
+        "VALUES ('v2', 'probationary', "
+        "'## Version metadata\nversion: v2\nstatus: probationary\n\nbody', 55.0, 1.4, 5)"
+    )
+    conn.commit()
+    conn.close()
+    # 5 trades: 4 wins (80% win rate, avg_r ≈ 1.34) — no degradation
+    for i in range(5):
+        _insert_closed_trade(db, r_multiple=1.5 if i < 4 else -0.5, outcome_pnl=150 if i < 4 else -50, version="v2")
+
+    mock_agent = Mock()
+    mock_agent.get_memory_block.return_value = (
+        "## Version metadata\nversion: v2\nstatus: probationary\npromote_after: 5\n\nbody"
+    )
+    result = gate_mod.check_probation(mock_agent)
+
+    assert result["outcome"] == "promoted"
+    assert result["version"] == "v2"
+    mock_agent.update_memory_block.assert_called_once()
+    written = mock_agent.update_memory_block.call_args[0][1]
+    assert "status: confirmed" in written
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT status FROM strategy_versions WHERE version='v2'").fetchone()
+    conn.close()
+    assert row[0] == "confirmed"
+
+
+def test_check_probation_reverts_on_win_rate_degradation(db, feedback_path):
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO strategy_versions (version, status, doc_text, promote_after) "
+        "VALUES ('v1', 'confirmed', 'v1 confirmed doc', 20)"
+    )
+    conn.execute(
+        "INSERT INTO strategy_versions (version, status, doc_text, "
+        "baseline_win_rate, baseline_avg_r, promote_after) "
+        "VALUES ('v2', 'probationary', 'v2 doc', 55.0, 1.4, 5)"
+    )
+    conn.commit()
+    conn.close()
+    # 5 trades: 1 win, 4 losses → 20% win rate (drops 35pp from baseline 55%)
+    for i in range(5):
+        _insert_closed_trade(db, r_multiple=1.5 if i == 0 else -1.0,
+                              outcome_pnl=150 if i == 0 else -100, version="v2")
+
+    mock_agent = Mock()
+    result = gate_mod.check_probation(mock_agent)
+
+    assert result["outcome"] == "reverted"
+    assert result["version"] == "v2"
+    mock_agent.update_memory_block.assert_called_once_with("strategy_doc", "v1 confirmed doc")
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT status, revert_reason FROM strategy_versions WHERE version='v2'").fetchone()
+    conn.close()
+    assert row[0] == "reverted"
+    assert "win rate" in row[1]
+    assert feedback_path.read_text().strip() != ""
+
+
+def test_check_probation_reverts_on_avg_r_degradation(db, feedback_path):
+    conn = sqlite3.connect(db)
+    conn.execute(
+        "INSERT INTO strategy_versions (version, status, doc_text, promote_after) "
+        "VALUES ('v1', 'confirmed', 'v1 doc', 20)"
+    )
+    conn.execute(
+        "INSERT INTO strategy_versions (version, status, doc_text, "
+        "baseline_win_rate, baseline_avg_r, promote_after) "
+        "VALUES ('v2', 'probationary', 'v2 doc', 55.0, 1.4, 5)"
+    )
+    conn.commit()
+    conn.close()
+    # 5 trades, avg_r = 0.7 — drops 0.7 > threshold 0.5
+    for _ in range(5):
+        _insert_closed_trade(db, r_multiple=0.7, outcome_pnl=70, version="v2")
+
+    mock_agent = Mock()
+    result = gate_mod.check_probation(mock_agent)
+    assert result["outcome"] == "reverted"
