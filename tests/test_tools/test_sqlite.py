@@ -259,3 +259,28 @@ def test_trade_query_blocks_update(db):
 def test_trade_query_empty_result(db):
     result = trade_query("SELECT * FROM trades WHERE ticker = 'NONEXISTENT'")
     assert result == []
+
+
+def test_backup_creates_backup_file(db, monkeypatch, tmp_path):
+    from scheduler.tools.sqlite import backup_trades_db
+    backup_file = tmp_path / "trades.backup.db"
+    monkeypatch.setattr(sqlite_module, "BACKUP_PATH", str(backup_file))
+    backup_trades_db()
+    assert backup_file.exists()
+
+
+def test_backup_contains_same_data(db, monkeypatch, tmp_path):
+    from scheduler.tools.sqlite import backup_trades_db
+    backup_file = tmp_path / "trades.backup.db"
+    monkeypatch.setattr(sqlite_module, "BACKUP_PATH", str(backup_file))
+    trade_open(
+        ticker="NVDA", side="buy", entry_price=875.50, size=10.0,
+        setup_type="momentum", hypothesis_id="H001",
+        rationale="Breakout", vix_at_entry=18.5, regime="bull_low_vol",
+    )
+    backup_trades_db()
+    conn = sqlite3.connect(str(backup_file))
+    rows = conn.execute("SELECT ticker FROM trades").fetchall()
+    conn.close()
+    assert len(rows) == 1
+    assert rows[0][0] == "NVDA"

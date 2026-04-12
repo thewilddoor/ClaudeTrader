@@ -9,6 +9,7 @@ import sqlite3
 from pathlib import Path
 
 DB_PATH = "/data/trades/trades.db"
+BACKUP_PATH = "/data/trades/trades.backup.db"
 
 _BLOCKED_KEYWORDS = frozenset(
     {"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "PRAGMA"}
@@ -236,3 +237,22 @@ def trade_query(sql: str) -> list[dict]:
         return [dict(row) for row in rows]
     finally:
         conn.close()
+
+
+def backup_trades_db() -> None:
+    """Create a consistent backup of trades.db using SQLite's backup API.
+
+    shutil.copy2 is intentionally NOT used here: WAL-mode databases have up to
+    three files (trades.db, trades.db-wal, trades.db-shm). A file copy may miss
+    uncheckpointed writes in the WAL. sqlite3.backup() performs an atomic,
+    consistent snapshot regardless of WAL state.
+
+    Source: DB_PATH. Destination: BACKUP_PATH. Both are monkeypatchable for tests.
+    """
+    src = sqlite3.connect(DB_PATH)
+    dst = sqlite3.connect(BACKUP_PATH)
+    try:
+        src.backup(dst)
+    finally:
+        dst.close()
+        src.close()
