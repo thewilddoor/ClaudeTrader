@@ -112,3 +112,110 @@ def test_snapshot_returns_none_when_no_strategy_version_row(db):
     metrics = gate_mod.snapshot_baseline_metrics()
     assert metrics["win_rate"] is None
     assert metrics["avg_r"] is None
+
+
+# --- apply_change ---
+
+def test_apply_change_raises_when_probationary_already_active(db, feedback_path):
+    _insert_version(db, "v1", "confirmed")
+    _insert_version(db, "v2", "probationary")
+
+    mock_agent = Mock()
+    with pytest.raises(gate_mod.StrategyGateError, match="probationary"):
+        gate_mod.apply_change(mock_agent, {"description": "new change", "new_strategy_doc": "doc"})
+
+    assert feedback_path.exists()
+    assert "v2" in feedback_path.read_text()
+
+
+def test_apply_change_raises_when_prescreen_blocks(db, feedback_path):
+    _insert_version(db, "v1", "confirmed")
+    # Profitable trade that would be removed by the filter
+    _insert_closed_trade(db, r_multiple=2.0, outcome_pnl=200, context={"rsi": 70.0})
+
+    mock_agent = Mock()
+    with pytest.raises(gate_mod.StrategyGateError, match="blocked"):
+        gate_mod.apply_change(
+            mock_agent,
+            {
+                "description": "Tighten RSI",
+                "new_strategy_doc": "doc",
+                "filter_sql": "json_extract(context_json, '$.rsi') < 65",
+            },
+        )
+    mock_agent.update_memory_block.assert_not_called()
+
+
+def test_apply_change_qualitative_sets_promote_after_20(db):
+    _insert_version(db, "v1", "confirmed")
+    mock_agent = Mock()
+
+    result = gate_mod.apply_change(mock_agent, {"description": "Be patient", "new_strategy_doc": "new doc"})
+
+    assert result["version"] == "v2"
+    assert result["promote_after"] == 20
+    assert result["description"] == "Be patient"
+
+
+def test_apply_change_backtested_sets_promote_after_10(db):
+    _insert_version(db, "v1", "confirmed")
+    # Only losing trade removed — pre-screen passes
+    _insert_closed_trade(db, r_multiple=-1.0, outcome_pnl=-100, context={"rsi": 70.0})
+
+    mock_agent = Mock()
+    result = gate_mod.apply_change(
+        mock_agent,
+        {
+            "description": "Tighten RSI",
+            "new_strategy_doc": "doc",
+            "filter_sql": "json_extract(context_json, '$.rsi') < 65",
+        },
+    )
+    assert result["promote_after"] == 10
+
+
+def test_apply_change_increments_version_number(db):
+    _insert_version(db, "v3", "confirmed")
+    mock_agent = Mock()
+    result = gate_mod.apply_change(mock_agent, {"description": "x", "new_strategy_doc": "d"})
+    assert result["version"] == "v4"
+
+
+def test_apply_change_writes_letta_before_inserting_db_row(db):
+    _insert_version(db, "v1", "confirmed")
+    mock_agent = Mock()
+    mock_agent.update_memory_block.side_effect = RuntimeError("Letta unavailable")
+
+    with pytest.raises(RuntimeError):
+        gate_mod.apply_change(mock_agent, {"description": "x", "new_strategy_doc": "d"})
+
+    conn = sqlite3.connect(db)
+    row = conn.execute("SELECT * FROM strategy_versions WHERE version='v2'").fetchone()
+    conn.close()
+    assert row is None  # DB row not inserted
+
+
+def test_apply_change_strategy_doc_contains_metadata_block(db):
+    _insert_version(db, "v1", "confirmed")
+    mock_agent = Mock()
+
+    gate_mod.apply_change(mock_agent, {"description": "x", "new_strategy_doc": "the body"})
+
+    written_doc = mock_agent.update_memory_block.call_args[0][1]
+    assert "version: v2" in written_doc
+    assert "status: probationary" in written_doc
+    assert "the body" in written_doc
+
+
+def test_apply_change_inserts_probationary_row_in_db(db):
+    _insert_version(db, "v1", "confirmed")
+    mock_agent = Mock()
+    gate_mod.apply_change(mock_agent, {"description": "x", "new_strategy_doc": "body"})
+
+    conn = sqlite3.connect(db)
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM strategy_versions WHERE version='v2'").fetchone()
+    conn.close()
+    assert row is not None
+    assert row["status"] == "probationary"
+    assert "body" in row["doc_text"]

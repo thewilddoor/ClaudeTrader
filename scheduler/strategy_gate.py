@@ -124,3 +124,116 @@ def snapshot_baseline_metrics() -> dict:
         return {"win_rate": metrics["win_rate"], "avg_r": metrics["avg_r"]}
     finally:
         conn.close()
+
+
+def apply_change(agent, proposed_change: dict) -> dict:
+    """
+    Apply a proposed strategy change as a new probationary version.
+
+    Raises StrategyGateError if:
+      - A probationary version is already active (one-at-a-time guard)
+      - The pre-screen blocks the change (avg_r of removed trades > 0)
+
+    Writes Letta core memory BEFORE inserting the strategy_versions row so that
+    a failed Letta write leaves no phantom DB row.
+
+    Returns {"version": str, "promote_after": int, "description": str}.
+    """
+    description = proposed_change.get("description", "")
+    new_doc = proposed_change.get("new_strategy_doc", "")
+    filter_sql = proposed_change.get("filter_sql")
+
+    conn = _connect()
+    try:
+        # One-at-a-time guard
+        prob_row = conn.execute(
+            "SELECT sv.version, sv.promote_after, "
+            "  (SELECT COUNT(*) FROM trades t "
+            "   WHERE t.strategy_version = sv.version AND t.closed_at IS NOT NULL) AS trade_count "
+            "FROM strategy_versions sv "
+            "WHERE sv.status = 'probationary' "
+            "ORDER BY sv.created_at DESC LIMIT 1"
+        ).fetchone()
+        if prob_row:
+            msg = (
+                f"Strategy {prob_row['version']} is still probationary "
+                f"({prob_row['trade_count']}/{prob_row['promote_after']} trades). "
+                f"No further strategy changes until it is promoted or reverted."
+            )
+            _append_feedback(msg)
+            raise StrategyGateError(msg)
+
+        # Determine next version number
+        last_row = conn.execute(
+            "SELECT version FROM strategy_versions ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if last_row:
+            try:
+                new_num = int(last_row["version"].lstrip("v")) + 1
+            except ValueError:
+                new_num = 2
+            new_version = f"v{new_num}"
+        else:
+            new_version = "v2"
+    finally:
+        conn.close()
+
+    # Snapshot baseline metrics before pre-screen (avoids extra DB round-trip)
+    baseline = snapshot_baseline_metrics()
+    wr_str = f"{baseline['win_rate']:.1f}" if baseline["win_rate"] is not None else "null"
+    ar_str = f"{baseline['avg_r']:.2f}" if baseline["avg_r"] is not None else "null"
+
+    # Pre-screen (backtestable path only)
+    promote_after = PROMOTE_AFTER_QUALITATIVE
+    if filter_sql:
+        try:
+            result = run_prescreen(filter_sql)
+            if result.blocked:
+                msg = (
+                    f"Strategy change blocked by pre-screen: '{description}'. "
+                    f"The filter would have removed {result.trades_evaluated} net-profitable trades "
+                    f"(avg R={result.avg_r_blocked:.2f}). Change not applied."
+                )
+                _append_feedback(msg)
+                raise StrategyGateError(
+                    msg,
+                    avg_r_blocked=result.avg_r_blocked,
+                    trades_evaluated=result.trades_evaluated,
+                )
+            promote_after = PROMOTE_AFTER_BACKTESTED
+        except StrategyGateError:
+            raise
+        except Exception as exc:
+            # Malformed filter_sql — fall back to qualitative, don't block
+            log.warning("filter_sql pre-screen failed (%s), treating as qualitative", exc)
+            promote_after = PROMOTE_AFTER_QUALITATIVE
+
+    # Build final doc: scheduler-owned metadata block prepended to Claude's proposed text
+    metadata = (
+        f"## Version metadata\n"
+        f"version: {new_version}\n"
+        f"status: probationary\n"
+        f"promote_after: {promote_after}\n"
+        f"baseline_win_rate: {wr_str}\n"
+        f"baseline_avg_r: {ar_str}\n\n"
+    )
+    final_doc = metadata + new_doc
+
+    # Write Letta first — if this raises, the DB row is NOT inserted
+    agent.update_memory_block("strategy_doc", final_doc)
+
+    conn = _connect()
+    try:
+        conn.execute(
+            """
+            INSERT INTO strategy_versions
+                (version, status, doc_text, baseline_win_rate, baseline_avg_r, promote_after)
+            VALUES (?, 'probationary', ?, ?, ?, ?)
+            """,
+            (new_version, final_doc, baseline["win_rate"], baseline["avg_r"], promote_after),
+        )
+        conn.commit()
+    finally:
+        conn.close()
+
+    return {"version": new_version, "promote_after": promote_after, "description": description}
