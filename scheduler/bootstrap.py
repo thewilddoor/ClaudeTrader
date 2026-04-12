@@ -38,6 +38,31 @@ def bootstrap():
     ok = attach_alpaca_mcp(agent.agent_id)
     print(f"Alpaca MCP attached: {ok}")
 
+    # Seed v1 row in strategy_versions — metadata block prepended for consistency with all later versions
+    from scheduler.tools.sqlite import _connect as _db_connect
+    from scheduler.agent import INITIAL_STRATEGY_DOC
+    _v1_metadata = (
+        "## Version metadata\n"
+        "version: v1\n"
+        "status: confirmed\n"
+        "promote_after: 20\n"
+        "baseline_win_rate: null\n"
+        "baseline_avg_r: null\n\n"
+    )
+    _v1_doc_text = _v1_metadata + INITIAL_STRATEGY_DOC
+    db_conn = _db_connect()
+    try:
+        if db_conn.execute("SELECT version FROM strategy_versions WHERE version='v1'").fetchone() is None:
+            db_conn.execute(
+                "INSERT INTO strategy_versions (version, status, doc_text, promote_after) "
+                "VALUES ('v1', 'confirmed', ?, 20)",
+                (_v1_doc_text,),
+            )
+            db_conn.commit()
+            print("Seeded strategy_versions with v1 (confirmed).")
+    finally:
+        db_conn.close()
+
     # Load script library index into agent memory
     index_path = Path("/app/scripts/indicators/index.json")
     if index_path.exists():
