@@ -19,7 +19,10 @@ def bootstrap():
     print("Trade store ready.")
 
     if AGENT_ID_FILE.exists():
-        print("Bootstrap already completed. Agent ID:", AGENT_ID_FILE.read_text().strip())
+        agent_id = AGENT_ID_FILE.read_text().strip()
+        print(f"Agent already exists ({agent_id}). Re-registering tools...")
+        tools = register_all_tools(agent_id)
+        print(f"Registered: {tools}")
         return
 
     agent_name = os.environ.get("LETTA_AGENT_NAME", "claude_trader")
