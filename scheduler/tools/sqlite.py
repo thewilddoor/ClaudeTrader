@@ -76,3 +76,53 @@ def bootstrap_db() -> None:
         conn.executescript(_SCHEMA)
     finally:
         conn.close()
+
+
+def trade_open(
+    ticker: str,
+    side: str,
+    entry_price: float,
+    size: float,
+    setup_type: str,
+    hypothesis_id: str,
+    rationale: str,
+    vix_at_entry: float,
+    regime: str,
+    stop_loss: float | None = None,
+    take_profit: float | None = None,
+) -> dict:
+    """Record a new trade at entry time.
+
+    Args:
+        ticker: Stock ticker symbol (e.g. 'NVDA').
+        side: Direction — 'buy' or 'sell'.
+        entry_price: Fill price per share.
+        size: Number of shares.
+        setup_type: Setup label (e.g. 'momentum', 'mean_reversion').
+        hypothesis_id: Hypothesis ID this trade is testing (e.g. 'H001').
+        rationale: Free-text explanation of why this trade was taken.
+        vix_at_entry: VIX level when the position was opened.
+        regime: Market regime at entry (e.g. 'bull_low_vol').
+        stop_loss: Stop-loss price passed to Alpaca, if any.
+        take_profit: Take-profit price passed to Alpaca, if any.
+
+    Returns:
+        dict: {'trade_id': int} — pass this to trade_close when exiting.
+    """
+    _db_guard()
+    conn = _connect()
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO trades
+                (ticker, side, entry_price, size, setup_type, hypothesis_id,
+                 rationale, vix_at_entry, regime, stop_loss, take_profit)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (ticker, side, entry_price, size, setup_type, hypothesis_id,
+             rationale, vix_at_entry, regime, stop_loss, take_profit),
+        )
+        conn.commit()
+        return {"trade_id": cursor.lastrowid}
+    finally:
+        conn.close()
