@@ -172,3 +172,39 @@ def test_trade_close_raises_if_already_closed(db):
     trade_close(trade_id=trade_id, exit_price=220.0, exit_reason="target", outcome_pnl=100.0, r_multiple=1.5)
     with pytest.raises(ValueError, match="already closed"):
         trade_close(trade_id=trade_id, exit_price=230.0, exit_reason="target", outcome_pnl=150.0, r_multiple=2.0)
+
+
+def test_hypothesis_log_inserts_row(db):
+    from scheduler.tools.sqlite import hypothesis_log
+    result = hypothesis_log(
+        hypothesis_id="H001",
+        event_type="formed",
+        body="Momentum setups outperform in high-VIX bull regimes",
+    )
+    assert "log_id" in result
+    assert isinstance(result["log_id"], int)
+
+
+def test_hypothesis_log_records_all_event_types(db):
+    from scheduler.tools.sqlite import hypothesis_log
+    for event_type in ("formed", "testing", "confirmed", "rejected", "refined"):
+        hypothesis_log(hypothesis_id="H002", event_type=event_type, body=f"Event: {event_type}")
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute(
+        "SELECT event_type FROM hypothesis_log WHERE hypothesis_id = 'H002'"
+    ).fetchall()
+    conn.close()
+    assert len(rows) == 5
+
+
+def test_hypothesis_log_sets_logged_at(db):
+    from scheduler.tools.sqlite import hypothesis_log
+    hypothesis_log(hypothesis_id="H003", event_type="formed", body="test")
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute(
+        "SELECT logged_at FROM hypothesis_log WHERE hypothesis_id = 'H003'"
+    ).fetchone()
+    conn.close()
+    assert row["logged_at"] is not None

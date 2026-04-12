@@ -177,3 +177,31 @@ def trade_close(
         return {"trade_id": trade_id, "closed_at": closed_at}
     finally:
         conn.close()
+
+
+def hypothesis_log(
+    hypothesis_id: str,
+    event_type: str,
+    body: str,
+) -> dict:
+    """Append a lifecycle event to the hypothesis ledger.
+
+    Args:
+        hypothesis_id: Hypothesis identifier (e.g. 'H001').
+        event_type: Lifecycle stage — one of: formed, testing, confirmed, rejected, refined.
+        body: Free-text description of this lifecycle event.
+
+    Returns:
+        dict: {'log_id': int}
+    """
+    _db_guard()
+    conn = _connect()
+    try:
+        cursor = conn.execute(
+            "INSERT INTO hypothesis_log (hypothesis_id, event_type, body) VALUES (?, ?, ?)",
+            (hypothesis_id, event_type, body),
+        )
+        conn.commit()
+        return {"log_id": cursor.lastrowid}
+    finally:
+        conn.close()
