@@ -1,4 +1,5 @@
 # tests/test_tools/test_sqlite.py
+import json
 import sqlite3
 import pytest
 import scheduler.tools.sqlite as sqlite_module
@@ -284,3 +285,77 @@ def test_backup_contains_same_data(db, monkeypatch, tmp_path):
     conn.close()
     assert len(rows) == 1
     assert rows[0][0] == "NVDA"
+
+
+def test_bootstrap_creates_strategy_versions_table(db):
+    conn = sqlite3.connect(str(db))
+    tables = {r[0] for r in conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'"
+    ).fetchall()}
+    conn.close()
+    assert "strategy_versions" in tables
+
+
+def test_bootstrap_adds_strategy_version_and_context_json_columns(db):
+    conn = sqlite3.connect(str(db))
+    cols = {r[1] for r in conn.execute("PRAGMA table_info(trades)").fetchall()}
+    conn.close()
+    assert "strategy_version" in cols
+    assert "context_json" in cols
+
+
+def test_bootstrap_is_idempotent_with_new_columns(db, monkeypatch):
+    monkeypatch.setattr(sqlite_module, "DB_PATH", str(db))
+    bootstrap_db()  # second call must not raise
+
+
+def test_trade_open_stamps_strategy_version_from_table(db):
+    # Seed a confirmed version row
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "INSERT INTO strategy_versions (version, status, doc_text, promote_after) "
+        "VALUES ('v1', 'confirmed', 'doc', 20)"
+    )
+    conn.commit()
+    conn.close()
+
+    result = trade_open(
+        ticker="AAPL", side="buy", entry_price=100.0, size=10.0,
+        setup_type="momentum", hypothesis_id="H001", rationale="test",
+        vix_at_entry=15.0, regime="bull",
+    )
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT strategy_version FROM trades WHERE id=?", (result["trade_id"],)
+    ).fetchone()
+    conn.close()
+    assert row[0] == "v1"
+
+
+def test_trade_open_stamps_none_when_strategy_versions_empty(db):
+    result = trade_open(
+        ticker="AAPL", side="buy", entry_price=100.0, size=10.0,
+        setup_type="momentum", hypothesis_id="H001", rationale="test",
+        vix_at_entry=15.0, regime="bull",
+    )
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT strategy_version FROM trades WHERE id=?", (result["trade_id"],)
+    ).fetchone()
+    conn.close()
+    assert row[0] is None
+
+
+def test_trade_open_stores_context_json(db):
+    ctx = json.dumps({"rsi": 62.5, "adx": 28.0})
+    result = trade_open(
+        ticker="NVDA", side="buy", entry_price=500.0, size=5.0,
+        setup_type="momentum", hypothesis_id="H002", rationale="test",
+        vix_at_entry=18.0, regime="bull", context_json=ctx,
+    )
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT context_json FROM trades WHERE id=?", (result["trade_id"],)
+    ).fetchone()
+    conn.close()
+    assert json.loads(row[0]) == {"rsi": 62.5, "adx": 28.0}

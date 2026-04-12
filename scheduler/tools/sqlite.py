@@ -34,6 +34,8 @@ CREATE TABLE IF NOT EXISTS trades (
     outcome_pnl   REAL,
     r_multiple    REAL,
     exit_reason   TEXT,
+    strategy_version TEXT,
+    context_json  TEXT,
     opened_at     TEXT    NOT NULL DEFAULT (datetime('now')),
     closed_at     TEXT
 );
@@ -45,6 +47,18 @@ CREATE TABLE IF NOT EXISTS hypothesis_log (
         CHECK(event_type IN ('formed','testing','confirmed','rejected','refined')),
     body          TEXT,
     logged_at     TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS strategy_versions (
+    version           TEXT    PRIMARY KEY,
+    status            TEXT    NOT NULL CHECK(status IN ('confirmed','probationary','reverted')),
+    doc_text          TEXT    NOT NULL,
+    baseline_win_rate REAL,
+    baseline_avg_r    REAL,
+    promote_after     INTEGER NOT NULL,
+    created_at        TEXT    NOT NULL DEFAULT (datetime('now')),
+    resolved_at       TEXT,
+    revert_reason     TEXT
 );
 """
 
@@ -76,6 +90,16 @@ def bootstrap_db() -> None:
     conn = _connect()
     try:
         conn.executescript(_SCHEMA)
+        # ALTER TABLE has no IF NOT EXISTS in SQLite — use try/except for idempotency
+        for stmt in [
+            "ALTER TABLE trades ADD COLUMN strategy_version TEXT",
+            "ALTER TABLE trades ADD COLUMN context_json TEXT",
+        ]:
+            try:
+                conn.execute(stmt)
+            except sqlite3.OperationalError:
+                pass  # column already exists
+        conn.commit()
     finally:
         conn.close()
 
@@ -92,6 +116,7 @@ def trade_open(
     regime: str,
     stop_loss: Optional[float] = None,
     take_profit: Optional[float] = None,
+    context_json: Optional[str] = None,
 ) -> dict:
     """Record a new trade at entry time.
 
@@ -107,6 +132,8 @@ def trade_open(
         regime: Market regime at entry (e.g. 'bull_low_vol').
         stop_loss: Stop-loss price passed to Alpaca, if any.
         take_profit: Take-profit price passed to Alpaca, if any.
+        context_json: Optional JSON string with indicator values at entry time,
+            e.g. '{"rsi": 63.2, "adx": 28.1}'. Used by strategy gate pre-screens.
 
     Returns:
         dict: {'trade_id': int} — pass this to trade_close when exiting.
@@ -114,15 +141,25 @@ def trade_open(
     _db_guard()
     conn = _connect()
     try:
+        # Stamp current strategy version — reads from strategy_versions, not core memory
+        version_row = conn.execute(
+            "SELECT version FROM strategy_versions "
+            "WHERE status IN ('confirmed', 'probationary') "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        strategy_version = version_row["version"] if version_row else None
+
         cursor = conn.execute(
             """
             INSERT INTO trades
                 (ticker, side, entry_price, size, setup_type, hypothesis_id,
-                 rationale, vix_at_entry, regime, stop_loss, take_profit)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                 rationale, vix_at_entry, regime, stop_loss, take_profit,
+                 strategy_version, context_json)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (ticker, side, entry_price, size, setup_type, hypothesis_id,
-             rationale, vix_at_entry, regime, stop_loss, take_profit),
+             rationale, vix_at_entry, regime, stop_loss, take_profit,
+             strategy_version, context_json),
         )
         conn.commit()
         return {"trade_id": cursor.lastrowid}
