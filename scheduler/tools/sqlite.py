@@ -205,3 +205,34 @@ def hypothesis_log(
         return {"log_id": cursor.lastrowid}
     finally:
         conn.close()
+
+
+def trade_query(sql: str) -> list[dict]:
+    """Execute a read-only SQL query against the trade store.
+
+    Any SQL containing INSERT, UPDATE, DELETE, DROP, ALTER, CREATE, or PRAGMA
+    is rejected before execution. Known limitation: this is a keyword scan on
+    the raw SQL string — a blocked keyword appearing inside a string literal
+    (e.g. WHERE rationale LIKE '%decided to DELETE%') will be rejected.
+    Rephrase the LIKE pattern if this occurs.
+
+    Args:
+        sql: A SELECT query string.
+
+    Returns:
+        list[dict]: Query results, one dict per row.
+    """
+    _db_guard()
+    upper = sql.upper()
+    for kw in _BLOCKED_KEYWORDS:
+        if kw in upper:
+            raise ValueError(
+                f"trade_query is read-only — SQL contains blocked keyword '{kw}'. "
+                "Use trade_open, trade_close, or hypothesis_log to write data."
+            )
+    conn = _connect(read_only=True)
+    try:
+        rows = conn.execute(sql).fetchall()
+        return [dict(row) for row in rows]
+    finally:
+        conn.close()

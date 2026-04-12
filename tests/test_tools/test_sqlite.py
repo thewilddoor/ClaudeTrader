@@ -2,7 +2,7 @@
 import sqlite3
 import pytest
 import scheduler.tools.sqlite as sqlite_module
-from scheduler.tools.sqlite import bootstrap_db, trade_open, trade_close
+from scheduler.tools.sqlite import bootstrap_db, trade_open, trade_close, trade_query
 
 
 @pytest.fixture
@@ -208,3 +208,54 @@ def test_hypothesis_log_sets_logged_at(db):
     ).fetchone()
     conn.close()
     assert row["logged_at"] is not None
+
+
+def test_trade_query_returns_list_of_dicts(db):
+    trade_open(
+        ticker="NVDA", side="buy", entry_price=875.50, size=10.0,
+        setup_type="momentum", hypothesis_id="H001",
+        rationale="Breakout", vix_at_entry=18.5, regime="bull_low_vol",
+    )
+    result = trade_query("SELECT ticker, entry_price FROM trades")
+    assert isinstance(result, list)
+    assert len(result) == 1
+    assert result[0]["ticker"] == "NVDA"
+    assert result[0]["entry_price"] == 875.50
+
+
+def test_trade_query_aggregation(db):
+    for price, pnl, r in [(875.50, 345.0, 2.1), (200.0, -50.0, -0.5), (180.0, 200.0, 1.8)]:
+        res = trade_open(
+            ticker="X", side="buy", entry_price=price, size=1.0,
+            setup_type="momentum", hypothesis_id="H001",
+            rationale="test", vix_at_entry=20.0, regime="bull_low_vol",
+        )
+        trade_close(
+            trade_id=res["trade_id"], exit_price=price + pnl,
+            exit_reason="test", outcome_pnl=pnl, r_multiple=r,
+        )
+    result = trade_query(
+        "SELECT AVG(r_multiple) as avg_r FROM trades WHERE setup_type = 'momentum' AND closed_at IS NOT NULL"
+    )
+    assert len(result) == 1
+    assert abs(result[0]["avg_r"] - ((2.1 + -0.5 + 1.8) / 3)) < 0.001
+
+
+def test_trade_query_blocks_insert(db):
+    with pytest.raises(ValueError, match="read-only"):
+        trade_query("INSERT INTO trades (ticker) VALUES ('X')")
+
+
+def test_trade_query_blocks_drop(db):
+    with pytest.raises(ValueError, match="read-only"):
+        trade_query("DROP TABLE trades")
+
+
+def test_trade_query_blocks_update(db):
+    with pytest.raises(ValueError, match="read-only"):
+        trade_query("UPDATE trades SET ticker = 'Y' WHERE id = 1")
+
+
+def test_trade_query_empty_result(db):
+    result = trade_query("SELECT * FROM trades WHERE ticker = 'NONEXISTENT'")
+    assert result == []
