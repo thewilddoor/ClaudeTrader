@@ -7,6 +7,7 @@ All connections use WAL mode + 5 s busy_timeout.
 """
 import sqlite3
 from pathlib import Path
+from typing import Optional
 
 DB_PATH = "/data/trades/trades.db"
 BACKUP_PATH = "/data/trades/trades.backup.db"
@@ -89,8 +90,8 @@ def trade_open(
     rationale: str,
     vix_at_entry: float,
     regime: str,
-    stop_loss: float | None = None,
-    take_profit: float | None = None,
+    stop_loss: Optional[float] = None,
+    take_profit: Optional[float] = None,
 ) -> dict:
     """Record a new trade at entry time.
 
