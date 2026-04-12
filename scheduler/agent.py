@@ -163,7 +163,7 @@ class _LettaClientShim:
         blocks = self._client.agents.blocks.list(agent_id=agent_id)
         for block in blocks:
             if block.label == block_name:
-                self._client.blocks.modify(block_id=block.id, value=value)
+                self._client.blocks.update(block_id=block.id, value=value)
                 return
         raise ValueError(f"Memory block '{block_name}' not found on agent {agent_id}")
 

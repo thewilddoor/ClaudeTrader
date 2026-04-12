@@ -37,7 +37,7 @@ def test_agent_get_core_memory_block():
         assert block == '{"version": "v1"}'
 
 
-def test_shim_update_memory_block_finds_block_and_calls_modify():
+def test_shim_update_memory_block_finds_block_and_calls_update():
     mock_block = Mock()
     mock_block.label = "strategy_doc"
     mock_block.id = "block-abc"
@@ -49,7 +49,7 @@ def test_shim_update_memory_block_finds_block_and_calls_modify():
     shim.update_memory_block("agent-123", "strategy_doc", "updated text")
 
     mock_letta.agents.blocks.list.assert_called_once_with(agent_id="agent-123")
-    mock_letta.blocks.modify.assert_called_once_with(block_id="block-abc", value="updated text")
+    mock_letta.blocks.update.assert_called_once_with(block_id="block-abc", value="updated text")
 
 
 def test_shim_update_memory_block_raises_if_block_not_found():
