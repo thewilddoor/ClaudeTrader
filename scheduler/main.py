@@ -21,6 +21,7 @@ from scheduler.sessions import (
     build_eod_reflection_prompt,
     build_weekly_review_prompt,
 )
+from scheduler.tools.sqlite import backup_trades_db
 from scheduler.notifier import (
     parse_session_output,
     format_trade_notification,
@@ -156,6 +157,15 @@ def job_weekly_review():
     run_session("weekly_review", prompt)
 
 
+def job_backup_db():
+    try:
+        backup_trades_db()
+        log.info("trades.db backup complete.")
+    except Exception as e:
+        log.error(f"trades.db backup failed: {e}")
+        send_telegram(format_error_notification("backup_db", str(e)))
+
+
 def main():
     scheduler = BlockingScheduler(timezone=ET)
 
@@ -164,8 +174,9 @@ def main():
     scheduler.add_job(job_health_check, CronTrigger(day_of_week="mon-fri", hour=13, minute=0, timezone=ET))
     scheduler.add_job(job_eod_reflection, CronTrigger(day_of_week="mon-fri", hour=15, minute=45, timezone=ET))
     scheduler.add_job(job_weekly_review, CronTrigger(day_of_week="sun", hour=18, minute=0, timezone=ET))
+    scheduler.add_job(job_backup_db, CronTrigger(hour=2, minute=0, timezone=ET))
 
-    log.info("ClaudeTrading scheduler started. 5 jobs scheduled.")
+    log.info("ClaudeTrading scheduler started. 6 jobs scheduled.")
     try:
         scheduler.start()
     except (KeyboardInterrupt, SystemExit):
