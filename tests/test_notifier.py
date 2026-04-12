@@ -6,6 +6,11 @@ from scheduler.notifier import (
     format_eod_summary,
     format_error_notification,
     send_telegram,
+    format_probation_start,
+    format_promotion,
+    format_revert,
+    format_gate_blocked,
+    format_bypass_alert,
 )
 
 
@@ -51,3 +56,38 @@ def test_send_telegram_calls_api(mock_post):
     call_kwargs = mock_post.call_args
     assert "token123" in str(call_kwargs)
     assert "test message" in str(call_kwargs)
+
+
+def test_format_probation_start():
+    msg = format_probation_start("v6", 10, "Tighten RSI threshold to 65")
+    assert "v6" in msg
+    assert "10" in msg
+    assert "Tighten RSI threshold to 65" in msg
+
+
+def test_format_promotion():
+    msg = format_promotion("v6", 10, 62.0, 1.6, 55.0, 1.4)
+    assert "v6" in msg
+    assert "62" in msg
+    assert "1.6" in msg
+    assert "55" in msg
+    assert "1.4" in msg
+
+
+def test_format_revert():
+    msg = format_revert("v6", 55.0, 1.4, 38.0, 0.7)
+    assert "v6" in msg
+    assert "55" in msg
+    assert "38" in msg
+    assert "0.7" in msg
+
+
+def test_format_gate_blocked():
+    msg = format_gate_blocked("Tighten RSI", 0.82, 14)
+    assert "0.82" in msg
+    assert "14" in msg
+
+
+def test_format_bypass_alert():
+    msg = format_bypass_alert("v7")
+    assert "v7" in msg

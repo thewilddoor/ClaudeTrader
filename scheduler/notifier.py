@@ -79,6 +79,64 @@ def format_alert(message: str) -> str:
     return f"⚠️ ALERT\n{message}"
 
 
+def format_probation_start(version: str, promote_after: int, description: str) -> str:
+    return (
+        f"🔬 STRATEGY {version} — PROBATIONARY\n"
+        f"Change: {description}\n"
+        f"Promote after: {promote_after} closed trades\n"
+        f"Auto-reverts if win rate drops >15pp or avg R drops >0.5"
+    )
+
+
+def format_promotion(
+    version: str,
+    trade_count: int,
+    new_win_rate: float,
+    new_avg_r: float,
+    baseline_win_rate: float,
+    baseline_avg_r: float,
+) -> str:
+    return (
+        f"✅ STRATEGY {version} PROMOTED → confirmed\n"
+        f"Trades evaluated: {trade_count}\n"
+        f"Win rate: {baseline_win_rate:.1f}% → {new_win_rate:.1f}%\n"
+        f"Avg R: {baseline_avg_r:.2f} → {new_avg_r:.2f}"
+    )
+
+
+def format_revert(
+    version: str,
+    baseline_win_rate: float,
+    baseline_avg_r: float,
+    actual_win_rate: float,
+    actual_avg_r: float,
+) -> str:
+    return (
+        f"⏪ STRATEGY {version} REVERTED\n"
+        f"Win rate: {baseline_win_rate:.1f}% → {actual_win_rate:.1f}%\n"
+        f"Avg R: {baseline_avg_r:.2f} → {actual_avg_r:.2f}\n"
+        f"Previous confirmed version restored."
+    )
+
+
+def format_gate_blocked(description: str, avg_r_blocked: float, trades_evaluated: int) -> str:
+    return (
+        f"🚫 STRATEGY CHANGE BLOCKED\n"
+        f"Proposed: {description}\n"
+        f"Pre-screen: would have removed {trades_evaluated} net-profitable trades "
+        f"(avg R={avg_r_blocked:.2f})\n"
+        f"Change not applied."
+    )
+
+
+def format_bypass_alert(version: str) -> str:
+    return (
+        f"⚠️ STRATEGY DOC BYPASS DETECTED\n"
+        f"Claude wrote strategy_doc directly (version bumped to {version}).\n"
+        f"Change captured and wrapped in probation automatically."
+    )
+
+
 def send_telegram(
     message: str,
     bot_token: Optional[str] = None,

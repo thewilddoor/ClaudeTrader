@@ -37,3 +37,25 @@ def test_weekly_review_prompt_contains_week():
     prompt = build_weekly_review_prompt(date="2026-04-13", week_number=16)
     assert "SESSION: weekly_review" in prompt
     assert "16" in prompt
+
+
+def test_eod_prompt_includes_pending_feedback():
+    prompt = build_eod_reflection_prompt("2026-04-12", [], pending_feedback="v5 was reverted.")
+    assert "FEEDBACK" in prompt
+    assert "v5 was reverted." in prompt
+
+
+def test_eod_prompt_omits_feedback_when_none():
+    prompt = build_eod_reflection_prompt("2026-04-12", [])
+    assert "FEEDBACK" not in prompt
+
+
+def test_weekly_prompt_includes_pending_feedback():
+    prompt = build_weekly_review_prompt("2026-04-12", 15, pending_feedback="Change blocked.")
+    assert "FEEDBACK" in prompt
+    assert "Change blocked." in prompt
+
+
+def test_weekly_prompt_omits_feedback_when_none():
+    prompt = build_weekly_review_prompt("2026-04-12", 15)
+    assert "FEEDBACK" not in prompt
