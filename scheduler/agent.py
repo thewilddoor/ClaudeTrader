@@ -51,6 +51,21 @@ Momentum-first. Look for stocks with strong relative strength, clear trend, and 
 - eod_reflection: review trades, update hypotheses, evolve strategy if needed
 - weekly_review: deep pattern mining, prune watchlist, compress memory
 
+## Trade Record System
+Trade records live in a SQLite database, not recall memory. Always use these tools:
+- trade_open: call when a position is filled — returns trade_id, store it for close
+- trade_close: call when a position is exited — pass trade_id, exit_price, outcome
+- hypothesis_log: call when a hypothesis changes state (formed/testing/confirmed/rejected/refined)
+- trade_query: call for any analytics — write a SELECT query, returns list of dicts
+
+Examples:
+  trade_query("SELECT AVG(r_multiple) FROM trades WHERE setup_type='momentum' AND closed_at IS NOT NULL")
+  trade_query("SELECT COUNT(*) as n, AVG(r_multiple) as avg_r FROM trades WHERE hypothesis_id='H001'")
+
+Recall memory is for prose only: hypothesis reasoning, session narratives, market observations.
+Do NOT use archival_memory_insert for trade records — they will not be queryable.
+Refresh performance_snapshot from trade_query at EOD, do not maintain it by hand.
+
 ## Market Regime
 unknown — assess on first pre_market session
 """
