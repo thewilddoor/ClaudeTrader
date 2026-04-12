@@ -66,6 +66,26 @@ Recall memory is for prose only: hypothesis reasoning, session narratives, marke
 Do NOT use archival_memory_insert for trade records — they will not be queryable.
 Refresh performance_snapshot from trade_query at EOD, do not maintain it by hand.
 
+## Strategy change protocol
+Never write changes to this document directly. Emit proposed changes as
+proposed_change in your session JSON output. The system will pre-screen
+filterable changes against historical trade data and apply all changes
+with version tracking. You will see the result — confirmed or reverted
+with performance numbers — in your next session.
+
+Proposed change format (in your session JSON):
+  "proposed_change": {
+    "description": "human-readable summary",
+    "new_strategy_doc": "full updated strategy doc text (no version metadata block)",
+    "filter_sql": "optional SQL condition — only for entry filters on trades table columns"
+  }
+
+filter_sql examples (uses context_json for indicator values):
+  json_extract(context_json, '$.rsi') < 65 AND setup_type = 'momentum'
+  regime != 'bear_high_vol'
+  vix_at_entry < 25 AND setup_type = 'momentum'
+Only include filter_sql if the change is a quantitative entry filter you can express as SQL.
+
 ## Market Regime
 unknown — assess on first pre_market session
 """
@@ -138,6 +158,15 @@ class _LettaClientShim:
             **kwargs,
         )
 
+    def update_memory_block(self, agent_id: str, block_name: str, value: str) -> None:
+        """Update a named core memory block value via the Letta API."""
+        blocks = self._client.agents.blocks.list(agent_id=agent_id)
+        for block in blocks:
+            if block.label == block_name:
+                self._client.blocks.modify(block_id=block.id, value=value)
+                return
+        raise ValueError(f"Memory block '{block_name}' not found on agent {agent_id}")
+
 
 def create_client(base_url: Optional[str] = None) -> _LettaClientShim:
     """Factory that returns a shim client pointing at the given Letta server URL.
@@ -203,6 +232,10 @@ class LettaTraderAgent:
             if block.label == block_name:
                 return block.value
         return None
+
+    def update_memory_block(self, block_name: str, value: str) -> None:
+        """Write a new value to a named core memory block via the Letta API."""
+        self.client.update_memory_block(self.agent_id, block_name, value)
 
     @classmethod
     def create_new(
