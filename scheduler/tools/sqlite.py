@@ -126,3 +126,54 @@ def trade_open(
         return {"trade_id": cursor.lastrowid}
     finally:
         conn.close()
+
+
+def trade_close(
+    trade_id: int,
+    exit_price: float,
+    exit_reason: str,
+    outcome_pnl: float,
+    r_multiple: float,
+) -> dict:
+    """Stamp exit fields onto an open trade.
+
+    Claude cannot modify entry fields — only the five exit columns are written.
+    closed_at is set automatically by the tool.
+
+    Args:
+        trade_id: ID returned by trade_open when the position was opened.
+        exit_price: Fill price at exit.
+        exit_reason: Why the trade was closed (e.g. 'hit_target', 'stop_hit', 'manual').
+        outcome_pnl: Realised P&L in dollars (negative for a loss).
+        r_multiple: Outcome expressed as a multiple of initial risk (1R = risked amount).
+
+    Returns:
+        dict: {'trade_id': int, 'closed_at': str}
+    """
+    _db_guard()
+    conn = _connect()
+    try:
+        row = conn.execute("SELECT id, closed_at FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        if row is None:
+            raise ValueError(f"trade_id {trade_id} not found")
+        if row["closed_at"] is not None:
+            raise ValueError(f"trade_id {trade_id} already closed at {row['closed_at']}")
+        conn.execute(
+            """
+            UPDATE trades
+               SET exit_price  = ?,
+                   exit_reason = ?,
+                   outcome_pnl = ?,
+                   r_multiple  = ?,
+                   closed_at   = datetime('now')
+             WHERE id = ?
+            """,
+            (exit_price, exit_reason, outcome_pnl, r_multiple, trade_id),
+        )
+        conn.commit()
+        closed_at = conn.execute(
+            "SELECT closed_at FROM trades WHERE id = ?", (trade_id,)
+        ).fetchone()["closed_at"]
+        return {"trade_id": trade_id, "closed_at": closed_at}
+    finally:
+        conn.close()

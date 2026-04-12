@@ -2,7 +2,7 @@
 import sqlite3
 import pytest
 import scheduler.tools.sqlite as sqlite_module
-from scheduler.tools.sqlite import bootstrap_db, trade_open
+from scheduler.tools.sqlite import bootstrap_db, trade_open, trade_close
 
 
 @pytest.fixture
@@ -124,3 +124,51 @@ def test_trade_open_raises_if_no_db(tmp_path, monkeypatch):
             vix_at_entry=20.0,
             regime="test",
         )
+
+
+def test_trade_close_stamps_exit_fields(db):
+    result = trade_open(
+        ticker="NVDA", side="buy", entry_price=875.50, size=10.0,
+        setup_type="momentum", hypothesis_id="H001",
+        rationale="Breakout", vix_at_entry=18.5, regime="bull_low_vol",
+    )
+    trade_id = result["trade_id"]
+    trade_close(
+        trade_id=trade_id,
+        exit_price=910.00,
+        exit_reason="hit_target",
+        outcome_pnl=345.00,
+        r_multiple=2.1,
+    )
+    conn = sqlite3.connect(str(db))
+    conn.row_factory = sqlite3.Row
+    row = conn.execute("SELECT * FROM trades WHERE id = ?", (trade_id,)).fetchone()
+    conn.close()
+    assert row["exit_price"] == 910.00
+    assert row["outcome_pnl"] == 345.00
+    assert row["r_multiple"] == 2.1
+    assert row["exit_reason"] == "hit_target"
+    assert row["closed_at"] is not None
+
+
+def test_trade_close_raises_if_trade_not_found(db):
+    with pytest.raises(ValueError, match="trade_id 9999 not found"):
+        trade_close(
+            trade_id=9999,
+            exit_price=100.0,
+            exit_reason="test",
+            outcome_pnl=0.0,
+            r_multiple=0.0,
+        )
+
+
+def test_trade_close_raises_if_already_closed(db):
+    result = trade_open(
+        ticker="TSLA", side="buy", entry_price=200.0, size=5.0,
+        setup_type="momentum", hypothesis_id="H001",
+        rationale="Gap up", vix_at_entry=22.0, regime="bull_high_vol",
+    )
+    trade_id = result["trade_id"]
+    trade_close(trade_id=trade_id, exit_price=220.0, exit_reason="target", outcome_pnl=100.0, r_multiple=1.5)
+    with pytest.raises(ValueError, match="already closed"):
+        trade_close(trade_id=trade_id, exit_price=230.0, exit_reason="target", outcome_pnl=150.0, r_multiple=2.0)
