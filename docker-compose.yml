@@ -5,6 +5,7 @@ services:
       - "8283:8283"
     volumes:
       - letta-db:/root/.letta
+      - trades-db:/data/trades
     environment:
       - ANTHROPIC_API_KEY=${ANTHROPIC_API_KEY}
     restart: unless-stopped
@@ -39,6 +40,7 @@ services:
       - ./scripts:/app/scripts
       - ./logs:/app/logs
       - agent-state:/app/state
+      - trades-db:/data/trades
     env_file:
       - .env
     depends_on:
@@ -51,3 +53,4 @@ services:
 volumes:
   letta-db:
   agent-state:
+  trades-db:

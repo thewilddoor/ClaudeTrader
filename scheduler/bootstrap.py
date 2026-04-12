@@ -8,11 +8,16 @@ import os
 from pathlib import Path
 from scheduler.agent import LettaTraderAgent
 from scheduler.tools.registry import register_all_tools, attach_alpaca_mcp
+from scheduler.tools.sqlite import bootstrap_db as init_trades_db
 
 AGENT_ID_FILE = Path("/app/state/.agent_id")
 
 
 def bootstrap():
+    print("Initialising SQLite trade store...")
+    init_trades_db()
+    print("Trade store ready.")
+
     if AGENT_ID_FILE.exists():
         print("Bootstrap already completed. Agent ID:", AGENT_ID_FILE.read_text().strip())
         return

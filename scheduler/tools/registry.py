@@ -16,6 +16,12 @@ from scheduler.tools.alpaca import (
     alpaca_list_orders,
     alpaca_cancel_order,
 )
+from scheduler.tools.sqlite import (
+    trade_open,
+    trade_close,
+    hypothesis_log,
+    trade_query,
+)
 
 ALL_TOOLS = [
     fmp_screener,
@@ -29,6 +35,10 @@ ALL_TOOLS = [
     alpaca_place_order,
     alpaca_list_orders,
     alpaca_cancel_order,
+    trade_open,
+    trade_close,
+    hypothesis_log,
+    trade_query,
 ]
 
 
