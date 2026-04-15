@@ -1,21 +1,12 @@
 """
 Alpaca trading tools implemented as direct HTTP calls to Alpaca's REST API v2.
 These bypass the MCP layer so Letta can execute them without private-IP restrictions.
+
+IMPORTANT: Each function must be fully self-contained (imports, helpers inlined)
+because Letta's upsert_from_function extracts only the function body and runs it
+in an isolated sandbox with no access to module-level code.
 """
-import os
-import requests
 from typing import Optional
-
-
-def _alpaca_headers(api_key: Optional[str], secret_key: Optional[str]) -> dict:
-    return {
-        "APCA-API-KEY-ID": api_key or os.environ["ALPACA_API_KEY"],
-        "APCA-API-SECRET-KEY": secret_key or os.environ["ALPACA_SECRET_KEY"],
-    }
-
-
-def _alpaca_base(base_url: Optional[str]) -> str:
-    return (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
 
 
 def alpaca_get_account(
@@ -33,11 +24,15 @@ def alpaca_get_account(
     Returns:
         dict: Account details with equity, buying_power, cash, portfolio_value fields.
     """
-    r = requests.get(
-        f"{_alpaca_base(base_url)}/v2/account",
-        headers=_alpaca_headers(api_key, secret_key),
-        timeout=10,
-    )
+    import os
+    import requests
+
+    api_key = api_key or os.environ["ALPACA_API_KEY"]
+    secret_key = secret_key or os.environ["ALPACA_SECRET_KEY"]
+    base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+
+    r = requests.get(f"{base}/v2/account", headers=headers, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -57,11 +52,15 @@ def alpaca_get_positions(
     Returns:
         list: Open positions with symbol, qty, avg_entry_price, unrealized_pl fields.
     """
-    r = requests.get(
-        f"{_alpaca_base(base_url)}/v2/positions",
-        headers=_alpaca_headers(api_key, secret_key),
-        timeout=10,
-    )
+    import os
+    import requests
+
+    api_key = api_key or os.environ["ALPACA_API_KEY"]
+    secret_key = secret_key or os.environ["ALPACA_SECRET_KEY"]
+    base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+
+    r = requests.get(f"{base}/v2/positions", headers=headers, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -95,6 +94,14 @@ def alpaca_place_order(
     Returns:
         dict: Created order with id, status, symbol, qty, side, type, filled_avg_price fields.
     """
+    import os
+    import requests
+
+    api_key = api_key or os.environ["ALPACA_API_KEY"]
+    secret_key = secret_key or os.environ["ALPACA_SECRET_KEY"]
+    base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+
     payload = {
         "symbol": symbol,
         "qty": str(qty),
@@ -106,12 +113,8 @@ def alpaca_place_order(
         payload["limit_price"] = str(limit_price)
     if stop_price is not None:
         payload["stop_price"] = str(stop_price)
-    r = requests.post(
-        f"{_alpaca_base(base_url)}/v2/orders",
-        headers=_alpaca_headers(api_key, secret_key),
-        json=payload,
-        timeout=10,
-    )
+
+    r = requests.post(f"{base}/v2/orders", headers=headers, json=payload, timeout=10)
     r.raise_for_status()
     return r.json()
 
@@ -135,9 +138,17 @@ def alpaca_list_orders(
     Returns:
         list: Order records with id, symbol, qty, side, type, status, filled_avg_price fields.
     """
+    import os
+    import requests
+
+    api_key = api_key or os.environ["ALPACA_API_KEY"]
+    secret_key = secret_key or os.environ["ALPACA_SECRET_KEY"]
+    base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+
     r = requests.get(
-        f"{_alpaca_base(base_url)}/v2/orders",
-        headers=_alpaca_headers(api_key, secret_key),
+        f"{base}/v2/orders",
+        headers=headers,
         params={"status": status, "limit": limit},
         timeout=10,
     )
@@ -162,11 +173,15 @@ def alpaca_cancel_order(
     Returns:
         dict: Empty dict on success (HTTP 204), or error details if cancellation fails.
     """
-    r = requests.delete(
-        f"{_alpaca_base(base_url)}/v2/orders/{order_id}",
-        headers=_alpaca_headers(api_key, secret_key),
-        timeout=10,
-    )
+    import os
+    import requests
+
+    api_key = api_key or os.environ["ALPACA_API_KEY"]
+    secret_key = secret_key or os.environ["ALPACA_SECRET_KEY"]
+    base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
+    headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
+
+    r = requests.delete(f"{base}/v2/orders/{order_id}", headers=headers, timeout=10)
     if r.status_code == 204:
         return {}
     r.raise_for_status()

@@ -1,15 +1,11 @@
-import os
-import requests
+"""
+Financial Modeling Prep (FMP) market data tools.
+
+IMPORTANT: Each function must be fully self-contained (imports, helpers inlined)
+because Letta's upsert_from_function extracts only the function body and runs it
+in an isolated sandbox with no access to module-level code.
+"""
 from typing import Optional
-
-FMP_BASE = "https://financialmodelingprep.com/stable"
-
-
-def _get(endpoint: str, params: dict, api_key: str) -> dict | list:
-    params["apikey"] = api_key
-    response = requests.get(f"{FMP_BASE}{endpoint}", params=params, timeout=10)
-    response.raise_for_status()
-    return response.json()
 
 
 def fmp_screener(
@@ -31,13 +27,20 @@ def fmp_screener(
     Returns:
         list: Matching stock records with symbol, price, volume, marketCap fields.
     """
+    import os
+    import requests
+
     api_key = api_key or os.environ["FMP_API_KEY"]
-    return _get("/company-screener", {
+    params = {
         "marketCapMoreThan": market_cap_more_than,
         "volumeMoreThan": volume_more_than,
         "exchange": exchange,
         "limit": limit,
-    }, api_key)
+        "apikey": api_key,
+    }
+    response = requests.get("https://financialmodelingprep.com/stable/company-screener", params=params, timeout=10)
+    response.raise_for_status()
+    return response.json()
 
 
 def fmp_ohlcv(ticker: str, limit: int = 90, api_key: Optional[str] = None) -> dict:
@@ -51,8 +54,14 @@ def fmp_ohlcv(ticker: str, limit: int = 90, api_key: Optional[str] = None) -> di
     Returns:
         dict: Contains 'symbol' string and 'historical' list of daily OHLCV records.
     """
+    import os
+    import requests
+
     api_key = api_key or os.environ["FMP_API_KEY"]
-    result = _get("/historical-price-eod/full", {"symbol": ticker, "limit": limit}, api_key)
+    params = {"symbol": ticker, "limit": limit, "apikey": api_key}
+    response = requests.get("https://financialmodelingprep.com/stable/historical-price-eod/full", params=params, timeout=10)
+    response.raise_for_status()
+    result = response.json()
     if isinstance(result, list):
         return {"symbol": ticker, "historical": result}
     return result
@@ -69,8 +78,14 @@ def fmp_news(tickers: list, limit: int = 10, api_key: Optional[str] = None) -> l
     Returns:
         list: News article records with title, text, url, publishedDate fields.
     """
+    import os
+    import requests
+
     api_key = api_key or os.environ["FMP_API_KEY"]
-    return _get("/news/stock", {"symbols": ",".join(tickers), "limit": limit}, api_key)
+    params = {"symbols": ",".join(tickers), "limit": limit, "apikey": api_key}
+    response = requests.get("https://financialmodelingprep.com/stable/news/stock", params=params, timeout=10)
+    response.raise_for_status()
+    return response.json()
 
 
 def fmp_earnings_calendar(from_date: str, to_date: str, api_key: Optional[str] = None) -> list:
@@ -84,5 +99,11 @@ def fmp_earnings_calendar(from_date: str, to_date: str, api_key: Optional[str] =
     Returns:
         list: Earnings events with symbol, date, epsEstimated, revenueEstimated fields.
     """
+    import os
+    import requests
+
     api_key = api_key or os.environ["FMP_API_KEY"]
-    return _get("/earnings-calendar", {"from": from_date, "to": to_date}, api_key)
+    params = {"from": from_date, "to": to_date, "apikey": api_key}
+    response = requests.get("https://financialmodelingprep.com/stable/earnings-calendar", params=params, timeout=10)
+    response.raise_for_status()
+    return response.json()

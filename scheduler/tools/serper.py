@@ -1,8 +1,11 @@
-import os
-import requests
-from typing import Optional
+"""
+Serper (Google Search API) tool.
 
-SERPER_BASE = "https://google.serper.dev"
+IMPORTANT: Each function must be fully self-contained (imports, helpers inlined)
+because Letta's upsert_from_function extracts only the function body and runs it
+in an isolated sandbox with no access to module-level code.
+"""
+from typing import Optional
 
 
 def serper_search(
@@ -22,9 +25,12 @@ def serper_search(
     Returns:
         dict: Search results with 'organic' list (search) or 'news' list (news type).
     """
+    import os
+    import requests
+
     api_key = api_key or os.environ["SERPER_API_KEY"]
     response = requests.post(
-        f"{SERPER_BASE}/{search_type}",
+        f"https://google.serper.dev/{search_type}",
         headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
         json={"q": query, "num": num},
         timeout=10,

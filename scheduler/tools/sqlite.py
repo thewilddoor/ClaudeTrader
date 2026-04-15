@@ -4,6 +4,10 @@ SQLite trade store. Four tools registered with Letta plus a backup utility.
 
 DB_PATH is a module-level constant so tests can monkeypatch it.
 All connections use WAL mode + 5 s busy_timeout.
+
+IMPORTANT: Each Letta-registered function must be fully self-contained (imports,
+helpers inlined) because Letta's upsert_from_function extracts only the function
+body and runs it in an isolated sandbox with no access to module-level code.
 """
 import sqlite3
 from pathlib import Path
@@ -68,10 +72,6 @@ def _connect(read_only: bool = False) -> sqlite3.Connection:
         conn = sqlite3.connect(f"file:{DB_PATH}?mode=ro", uri=True)
     else:
         conn = sqlite3.connect(DB_PATH)
-    # On a read-only connection, PRAGMA journal_mode=WAL is harmless if the DB is
-    # already in WAL mode (returns the current mode without changing it). It will
-    # silently fail if the DB is not in WAL mode — but bootstrap_db() sets WAL
-    # before any tool or scheduler connection is ever opened.
     conn.execute("PRAGMA journal_mode=WAL")
     conn.execute("PRAGMA busy_timeout=5000")
     conn.execute("PRAGMA foreign_keys=ON")
@@ -90,7 +90,6 @@ def bootstrap_db() -> None:
     conn = _connect()
     try:
         conn.executescript(_SCHEMA)
-        # ALTER TABLE has no IF NOT EXISTS in SQLite — use try/except for idempotency
         for stmt in [
             "ALTER TABLE trades ADD COLUMN strategy_version TEXT",
             "ALTER TABLE trades ADD COLUMN context_json TEXT",
@@ -98,7 +97,7 @@ def bootstrap_db() -> None:
             try:
                 conn.execute(stmt)
             except sqlite3.OperationalError:
-                pass  # column already exists
+                pass
         conn.commit()
     finally:
         conn.close()
@@ -138,10 +137,20 @@ def trade_open(
     Returns:
         dict: {'trade_id': int} — pass this to trade_close when exiting.
     """
-    _db_guard()
-    conn = _connect()
+    import sqlite3
+    from pathlib import Path
+
+    db_path = "/data/trades/trades.db"
+    if not Path(db_path).exists():
+        raise RuntimeError("trades.db not found — run bootstrap first")
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+
     try:
-        # Stamp current strategy version — reads from strategy_versions, not core memory
         version_row = conn.execute(
             "SELECT version FROM strategy_versions "
             "WHERE status IN ('confirmed', 'probationary') "
@@ -189,8 +198,19 @@ def trade_close(
     Returns:
         dict: {'trade_id': int, 'closed_at': str}
     """
-    _db_guard()
-    conn = _connect()
+    import sqlite3
+    from pathlib import Path
+
+    db_path = "/data/trades/trades.db"
+    if not Path(db_path).exists():
+        raise RuntimeError("trades.db not found — run bootstrap first")
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+
     try:
         row = conn.execute("SELECT id, closed_at FROM trades WHERE id = ?", (trade_id,)).fetchone()
         if row is None:
@@ -233,8 +253,19 @@ def hypothesis_log(
     Returns:
         dict: {'log_id': int}
     """
-    _db_guard()
-    conn = _connect()
+    import sqlite3
+    from pathlib import Path
+
+    db_path = "/data/trades/trades.db"
+    if not Path(db_path).exists():
+        raise RuntimeError("trades.db not found — run bootstrap first")
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+
     try:
         cursor = conn.execute(
             "INSERT INTO hypothesis_log (hypothesis_id, event_type, body) VALUES (?, ?, ?)",
@@ -261,15 +292,28 @@ def trade_query(sql: str) -> list[dict]:
     Returns:
         list[dict]: Query results, one dict per row.
     """
-    _db_guard()
+    import sqlite3
+    from pathlib import Path
+
+    db_path = "/data/trades/trades.db"
+    if not Path(db_path).exists():
+        raise RuntimeError("trades.db not found — run bootstrap first")
+
+    blocked = frozenset({"INSERT", "UPDATE", "DELETE", "DROP", "ALTER", "CREATE", "PRAGMA"})
     upper = sql.upper()
-    for kw in _BLOCKED_KEYWORDS:
+    for kw in blocked:
         if kw in upper:
             raise ValueError(
                 f"trade_query is read-only — SQL contains blocked keyword '{kw}'. "
                 "Use trade_open, trade_close, or hypothesis_log to write data."
             )
-    conn = _connect(read_only=True)
+
+    conn = sqlite3.connect(f"file:{db_path}?mode=ro", uri=True)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+
     try:
         rows = conn.execute(sql).fetchall()
         return [dict(row) for row in rows]
