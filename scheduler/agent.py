@@ -129,8 +129,7 @@ filter_sql examples:
 Only include filter_sql for quantitative entry filters expressible as SQL.
 
 ## System Constraints
-Tool defaults are starting points — override explicitly if needed.
-Hard limits: API 30s timeout; run_script 60s/512MB; backtest 60 days; one probation max.
+Hard limits (not overridable): API 30s timeout; run_script 60s/512MB; backtest 60 days; one probation max.
 """
 
 INITIAL_PERFORMANCE_SNAPSHOT = """{
