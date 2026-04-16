@@ -12,24 +12,24 @@ from typing import Optional
 
 
 def _set_resource_limits():
-    """Set 256MB memory limit for sandboxed subprocess. Not registered with Letta."""
+    """Set 512MB memory limit for sandboxed subprocess. Not registered with Letta."""
     try:
         import resource
-        resource.setrlimit(resource.RLIMIT_AS, (256 * 1024 * 1024, 256 * 1024 * 1024))
+        resource.setrlimit(resource.RLIMIT_AS, (512 * 1024 * 1024, 512 * 1024 * 1024))
     except Exception:
         pass
 
 
 def run_script(
     code: str,
-    timeout: int = 30,
+    timeout: int = 60,
     scripts_dir: Optional[str] = None,
 ) -> dict:
     """Execute a Python script in a sandboxed subprocess.
 
     Args:
         code: Python source code to execute as a string.
-        timeout: Maximum execution time in seconds before the process is killed (default 30).
+        timeout: Maximum execution time in seconds before the process is killed (default 60, changeable).
         scripts_dir: Path to the scripts directory added to PYTHONPATH (reads from SCRIPTS_DIR env var).
 
     Returns:
