@@ -19,7 +19,7 @@ def serper_search(
     Args:
         query: Search query string (e.g. 'AAPL earnings report Q1 2026').
         search_type: Type of search; 'search' for general web results, 'news' for news.
-        num: Number of results to return (default 10).
+        num: Number of results to return (default 10, changeable).
         api_key: Serper API key; reads from SERPER_API_KEY env var if not provided.
 
     Returns:
@@ -33,7 +33,7 @@ def serper_search(
         f"https://google.serper.dev/{search_type}",
         headers={"X-API-KEY": api_key, "Content-Type": "application/json"},
         json={"q": query, "num": num},
-        timeout=10,
+        timeout=30,
     )
     response.raise_for_status()
     return response.json()
