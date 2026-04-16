@@ -32,7 +32,7 @@ def alpaca_get_account(
     base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
     headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
 
-    r = requests.get(f"{base}/v2/account", headers=headers, timeout=10)
+    r = requests.get(f"{base}/v2/account", headers=headers, timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -60,7 +60,7 @@ def alpaca_get_positions(
     base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
     headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
 
-    r = requests.get(f"{base}/v2/positions", headers=headers, timeout=10)
+    r = requests.get(f"{base}/v2/positions", headers=headers, timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -114,7 +114,7 @@ def alpaca_place_order(
     if stop_price is not None:
         payload["stop_price"] = str(stop_price)
 
-    r = requests.post(f"{base}/v2/orders", headers=headers, json=payload, timeout=10)
+    r = requests.post(f"{base}/v2/orders", headers=headers, json=payload, timeout=30)
     r.raise_for_status()
     return r.json()
 
@@ -130,7 +130,7 @@ def alpaca_list_orders(
 
     Args:
         status: Order status filter; 'open', 'closed', or 'all' (default 'open').
-        limit: Maximum number of orders to return (default 50).
+        limit: Maximum number of orders to return (default 50, changeable).
         api_key: Alpaca API key; reads from ALPACA_API_KEY env var if not provided.
         secret_key: Alpaca secret key; reads from ALPACA_SECRET_KEY env var if not provided.
         base_url: Alpaca base URL; reads from ALPACA_BASE_URL env var if not provided.
@@ -150,7 +150,7 @@ def alpaca_list_orders(
         f"{base}/v2/orders",
         headers=headers,
         params={"status": status, "limit": limit},
-        timeout=10,
+        timeout=30,
     )
     r.raise_for_status()
     return r.json()
@@ -181,7 +181,7 @@ def alpaca_cancel_order(
     base = (base_url or os.environ.get("ALPACA_BASE_URL", "https://paper-api.alpaca.markets")).rstrip("/")
     headers = {"APCA-API-KEY-ID": api_key, "APCA-API-SECRET-KEY": secret_key}
 
-    r = requests.delete(f"{base}/v2/orders/{order_id}", headers=headers, timeout=10)
+    r = requests.delete(f"{base}/v2/orders/{order_id}", headers=headers, timeout=30)
     if r.status_code == 204:
         return {}
     r.raise_for_status()
