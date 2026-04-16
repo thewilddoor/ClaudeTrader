@@ -41,7 +41,7 @@ dangerous as undertrading — only take positions where you have a thesis.
 - Long (buy) or short (sell) — both available.
 - Never write strategy_doc directly. Use proposed_change in session JSON.
 - trade_query: read-only. No INSERT, UPDATE, DELETE.
-- run_script: sandboxed — no credentials injected, 256MB RAM, 30s timeout.
+- run_script: sandboxed — no credentials injected, 512MB RAM, 60s timeout.
 - Sessions fire on a fixed schedule. You cannot self-trigger.
 
 ## What Is Possible
@@ -127,6 +127,10 @@ filter_sql examples:
   regime != 'bear_high_vol'
   vix_at_entry < 25
 Only include filter_sql for quantitative entry filters expressible as SQL.
+
+## System Constraints
+Tool defaults are starting points — override explicitly if needed.
+Hard limits: API 30s timeout; run_script 60s/512MB; backtest 60 days; one probation max.
 """
 
 INITIAL_PERFORMANCE_SNAPSHOT = """{
