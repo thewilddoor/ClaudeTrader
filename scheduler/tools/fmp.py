@@ -18,10 +18,10 @@ def fmp_screener(
     """Screen US stocks by market cap and volume.
 
     Args:
-        market_cap_more_than: Minimum market cap in USD (default 1 billion).
-        volume_more_than: Minimum average daily volume (default 500 thousand).
-        exchange: Comma-separated list of exchanges to include (e.g. NYSE,NASDAQ).
-        limit: Maximum number of results to return.
+        market_cap_more_than: Minimum market cap in USD (default 1 billion, changeable).
+        volume_more_than: Minimum average daily volume (default 500 thousand, changeable).
+        exchange: Comma-separated exchanges to include (default NYSE,NASDAQ, changeable).
+        limit: Maximum number of results to return (default 50, changeable).
         api_key: FMP API key; reads from FMP_API_KEY env var if not provided.
 
     Returns:
@@ -38,7 +38,7 @@ def fmp_screener(
         "limit": limit,
         "apikey": api_key,
     }
-    response = requests.get("https://financialmodelingprep.com/stable/company-screener", params=params, timeout=10)
+    response = requests.get("https://financialmodelingprep.com/stable/company-screener", params=params, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -48,7 +48,7 @@ def fmp_ohlcv(ticker: str, limit: int = 90, api_key: Optional[str] = None) -> di
 
     Args:
         ticker: Stock ticker symbol (e.g. AAPL, MSFT).
-        limit: Number of trading days of history to return (default 90).
+        limit: Number of trading days of history to return (default 90, changeable).
         api_key: FMP API key; reads from FMP_API_KEY env var if not provided.
 
     Returns:
@@ -59,7 +59,7 @@ def fmp_ohlcv(ticker: str, limit: int = 90, api_key: Optional[str] = None) -> di
 
     api_key = api_key or os.environ["FMP_API_KEY"]
     params = {"symbol": ticker, "limit": limit, "apikey": api_key}
-    response = requests.get("https://financialmodelingprep.com/stable/historical-price-eod/full", params=params, timeout=10)
+    response = requests.get("https://financialmodelingprep.com/stable/historical-price-eod/full", params=params, timeout=30)
     response.raise_for_status()
     result = response.json()
     if isinstance(result, list):
@@ -72,7 +72,7 @@ def fmp_news(tickers: list, limit: int = 10, api_key: Optional[str] = None) -> l
 
     Args:
         tickers: List of ticker symbols to fetch news for (e.g. ['AAPL', 'MSFT']).
-        limit: Maximum number of news articles to return per ticker.
+        limit: Maximum number of news articles to return per ticker (default 10, changeable).
         api_key: FMP API key; reads from FMP_API_KEY env var if not provided.
 
     Returns:
@@ -83,7 +83,7 @@ def fmp_news(tickers: list, limit: int = 10, api_key: Optional[str] = None) -> l
 
     api_key = api_key or os.environ["FMP_API_KEY"]
     params = {"symbols": ",".join(tickers), "limit": limit, "apikey": api_key}
-    response = requests.get("https://financialmodelingprep.com/stable/news/stock", params=params, timeout=10)
+    response = requests.get("https://financialmodelingprep.com/stable/news/stock", params=params, timeout=30)
     response.raise_for_status()
     return response.json()
 
@@ -104,6 +104,6 @@ def fmp_earnings_calendar(from_date: str, to_date: str, api_key: Optional[str] =
 
     api_key = api_key or os.environ["FMP_API_KEY"]
     params = {"from": from_date, "to": to_date, "apikey": api_key}
-    response = requests.get("https://financialmodelingprep.com/stable/earnings-calendar", params=params, timeout=10)
+    response = requests.get("https://financialmodelingprep.com/stable/earnings-calendar", params=params, timeout=30)
     response.raise_for_status()
     return response.json()
