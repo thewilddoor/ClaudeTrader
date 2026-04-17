@@ -16,6 +16,7 @@ from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
 from scheduler.agent import AgentCore
+from scheduler.memory import MemoryStore
 from scheduler import strategy_gate
 from scheduler.sessions import (
     build_pre_market_prompt,
@@ -23,6 +24,7 @@ from scheduler.sessions import (
     build_health_check_prompt,
     build_eod_reflection_prompt,
     build_weekly_review_prompt,
+    build_recent_context,
 )
 from scheduler.tools.sqlite import backup_trades_db
 from scheduler.notifier import (
@@ -41,6 +43,7 @@ from scheduler.notifier import (
 ET = ZoneInfo("America/New_York")
 AGENT_ID_FILE = Path("/app/state/.agent_id")  # kept for backwards compat / tests
 PENDING_FEEDBACK_PATH = Path("/app/state/pending_feedback.txt")
+DB_PATH = os.environ.get("TRADES_DB_PATH", "/data/trades/trades.db")
 SESSION_TIMEOUT = 900  # 15 minutes
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -100,6 +103,80 @@ def _get_todays_trades() -> list:
         return resp.json() if resp.status_code == 200 else []
     except Exception:
         return []
+
+
+def _build_recent_context_str() -> str:
+    """Fetch all data needed for recent_context and build the injected string."""
+    from scheduler.tools.sqlite import _connect as _db_connect
+
+    # Last 5 closed trades from SQLite
+    last_trades = []
+    try:
+        conn = _db_connect(read_only=True)
+        rows = conn.execute(
+            "SELECT ticker, side, r_multiple, exit_reason, closed_at "
+            "FROM trades WHERE closed_at IS NOT NULL "
+            "ORDER BY closed_at DESC LIMIT 5"
+        ).fetchall()
+        last_trades = [dict(r) for r in rows]
+        conn.close()
+    except Exception:
+        pass
+
+    # Active hypotheses (formed or testing, not confirmed/rejected)
+    active_hypotheses = []
+    try:
+        conn = _db_connect(read_only=True)
+        rows = conn.execute(
+            "SELECT hypothesis_id, body FROM hypothesis_log "
+            "WHERE event_type IN ('formed', 'testing') "
+            "ORDER BY logged_at DESC"
+        ).fetchall()
+        seen: set = set()
+        for r in rows:
+            if r["hypothesis_id"] not in seen:
+                active_hypotheses.append(dict(r))
+                seen.add(r["hypothesis_id"])
+        conn.close()
+    except Exception:
+        pass
+
+    # Live positions from Alpaca
+    positions = _get_open_positions()
+
+    # Current strategy version
+    strategy_version = "v1"
+    strategy_status = "confirmed"
+    try:
+        conn = _db_connect(read_only=True)
+        row = conn.execute(
+            "SELECT version, status FROM strategy_versions "
+            "WHERE status IN ('confirmed', 'probationary') "
+            "ORDER BY created_at DESC LIMIT 1"
+        ).fetchone()
+        if row:
+            strategy_version = row["version"]
+            strategy_status = row["status"]
+        conn.close()
+    except Exception:
+        pass
+
+    # Last 2 session digests
+    last_digests = []
+    try:
+        memory = MemoryStore(db_path=DB_PATH)
+        last_digests = memory.get_recent_digests(n=2)
+    except Exception:
+        pass
+
+    return build_recent_context(
+        last_trades=last_trades,
+        active_hypotheses=active_hypotheses,
+        positions=positions,
+        strategy_version=strategy_version,
+        strategy_status=strategy_status,
+        last_digests=last_digests,
+    )
 
 
 def run_session(session_type: str, prompt: str, max_retries: int = 1):
@@ -209,23 +286,33 @@ def run_session(session_type: str, prompt: str, max_retries: int = 1):
 
 def job_pre_market():
     now = datetime.now(ET)
+    recent_context = _build_recent_context_str()
     prompt = build_pre_market_prompt(
         date=now.strftime("%Y-%m-%d"),
         market_opens_in="3h30m",
+        recent_context=recent_context,
     )
     run_session("pre_market", prompt)
 
 
 def job_market_open():
     now = datetime.now(ET)
-    prompt = build_market_open_prompt(date=now.strftime("%Y-%m-%d"), time_et="09:30")
+    recent_context = _build_recent_context_str()
+    prompt = build_market_open_prompt(
+        date=now.strftime("%Y-%m-%d"),
+        time_et="09:30",
+        recent_context=recent_context,
+    )
     run_session("market_open", prompt)
 
 
 def job_health_check():
     now = datetime.now(ET)
-    positions = _get_open_positions()
-    prompt = build_health_check_prompt(date=now.strftime("%Y-%m-%d"), positions=positions)
+    recent_context = _build_recent_context_str()
+    prompt = build_health_check_prompt(
+        date=now.strftime("%Y-%m-%d"),
+        recent_context=recent_context,
+    )
     run_session("health_check", prompt)
 
 
@@ -233,9 +320,11 @@ def job_eod_reflection():
     now = datetime.now(ET)
     trades = _get_todays_trades()
     pending_feedback = _read_and_clear_pending_feedback()
+    recent_context = _build_recent_context_str()
     prompt = build_eod_reflection_prompt(
         date=now.strftime("%Y-%m-%d"),
         trades_today=trades,
+        recent_context=recent_context,
         pending_feedback=pending_feedback,
     )
     run_session("eod_reflection", prompt)
@@ -245,9 +334,11 @@ def job_weekly_review():
     now = datetime.now(ET)
     week_num = now.isocalendar()[1]
     pending_feedback = _read_and_clear_pending_feedback()
+    recent_context = _build_recent_context_str()
     prompt = build_weekly_review_prompt(
         date=now.strftime("%Y-%m-%d"),
         week_number=week_num,
+        recent_context=recent_context,
         pending_feedback=pending_feedback,
     )
     run_session("weekly_review", prompt)
