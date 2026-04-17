@@ -183,7 +183,7 @@ def test_tool_schemas_covers_all_15_tools():
         "alpaca_get_account", "alpaca_get_positions", "alpaca_place_order",
         "alpaca_list_orders", "alpaca_cancel_order",
         "fmp_screener", "fmp_ohlcv", "fmp_news", "fmp_earnings_calendar",
-        "serper_search", "run_script",
+        "serper_search", "run_script", "update_memory_block",
     }
     assert required == names
 
@@ -197,3 +197,59 @@ def test_tool_schemas_have_required_fields():
         assert tool["input_schema"]["type"] == "object"
         assert "properties" in tool["input_schema"]
         assert "required" in tool["input_schema"]
+
+
+def test_run_session_update_memory_block_tool_writes_to_store(mem_db):
+    """update_memory_block tool call in run_session must persist to MemoryStore."""
+    import threading
+    mock_digester = MagicMock()
+    mock_digester.summarize.return_value = None
+    mock_client = MagicMock()
+
+    from scheduler.agent import AgentCore
+    agent = AgentCore(
+        db_path=mem_db.db_path,
+        model="claude-sonnet-4-6",
+        api_key="test",
+        _client=mock_client,
+        _digester=mock_digester,
+        _memory=mem_db,
+    )
+
+    # Simulate: first call returns update_memory_block tool_use, second returns end_turn
+    mock_client.messages.create.side_effect = [
+        _tool_use("update_memory_block", {"block_name": "watchlist", "value": "NVDA | momentum long | HIGH"}, "t1"),
+        _end_turn('{"session": "pre_market", "summary": "done", "errors": []}'),
+    ]
+
+    agent.run_session("pre_market", "run session")
+
+    # The memory block must have been updated
+    assert mem_db.read("watchlist") == "NVDA | momentum long | HIGH"
+
+
+def test_run_session_update_memory_block_rejects_strategy_doc(mem_db):
+    """update_memory_block must NOT allow writing strategy_doc directly."""
+    mock_digester = MagicMock()
+    mock_digester.summarize.return_value = None
+    mock_client = MagicMock()
+
+    from scheduler.agent import AgentCore
+    agent = AgentCore(
+        db_path=mem_db.db_path,
+        model="claude-sonnet-4-6",
+        api_key="test",
+        _client=mock_client,
+        _digester=mock_digester,
+        _memory=mem_db,
+    )
+
+    mock_client.messages.create.side_effect = [
+        _tool_use("update_memory_block", {"block_name": "strategy_doc", "value": "hacked"}, "t1"),
+        _end_turn('{"session": "test", "summary": "done", "errors": []}'),
+    ]
+
+    agent.run_session("test", "run session")
+
+    # strategy_doc must NOT have been overwritten
+    assert mem_db.read("strategy_doc") == "test strategy"

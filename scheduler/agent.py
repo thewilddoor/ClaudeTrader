@@ -58,8 +58,8 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 2. fmp_ohlcv("SPY") + fmp_ohlcv("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime). Can still use run_script with market_regime_detector for cross-asset breadth if needed.
 3. fmp_screener to find candidates (volume > 1M, mkt_cap > 2B)
 4. For each candidate: fmp_ohlcv(ticker) — all indicators pre-calculated. Add fmp_news, fmp_earnings_calendar for qualitative context.
-5. Write today_context with regime + top 5-10 setups
-6. Write watchlist (max 12)
+5. update_memory_block("today_context", ...) with regime + top 5-10 setups
+6. update_memory_block("watchlist", ...) with max 12 entries
 7. hypothesis_log new theses as "formed"
 
 ### market_open (9:30 AM ET)
@@ -85,20 +85,25 @@ No proposed_change in health_check — system rejects it.
 
 ### eod_reflection (3:45 PM ET)
 1. Close remaining open positions (unless overnight hold explicitly justified in today_context)
-2. trade_query to compute win_rate_10, win_rate_20, avg_rr — update performance_snapshot
-3. Write new observations (<=15 words, date-tagged)
-4. If pattern across >=3 trades: emit proposed_change
-5. Reset today_context to "Cleared."
+2. trade_query to compute win_rate_10, win_rate_20, avg_rr
+3. update_memory_block("performance_snapshot", ...) with updated stats
+4. update_memory_block("observations", ...) with new bullets (<=15 words, date-tagged, max 15 total)
+5. update_memory_block("today_context", "Cleared.")
+6. If pattern across >=3 trades: emit proposed_change
 
 ### weekly_review (6:00 PM Sunday)
 1. Comprehensive trade_query: win rates by setup_type, regime, VIX range, hypothesis
 2. Confirm (>=10 trades, positive avg_r) or reject (negative avg_r) hypotheses
-3. Compress observations to <=10 bullets
-4. Compress watchlist — remove expired theses
-5. Update performance_snapshot
+3. update_memory_block("observations", ...) compressed to <=10 bullets
+4. update_memory_block("watchlist", ...) remove expired theses
+5. update_memory_block("performance_snapshot", ...) with updated stats
 6. proposed_change if major pattern found
 
 ## Tool Reference
+
+### Memory (CRITICAL — call these to persist your work)
+update_memory_block(block_name, value) — write to: watchlist, today_context, performance_snapshot, observations
+  Call at the END of each session. Without this call your analysis is lost.
 
 ### Market Data
 fmp_screener(market_cap_more_than, volume_more_than, exchange, limit)
