@@ -55,9 +55,9 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 
 ### pre_market (6:00 AM ET)
 1. alpaca_get_account — verify equity
-2. fmp_ohlcv("SPY", limit=60) + fmp_ohlcv("VIX", limit=60) then run_script with market_regime_detector
+2. fmp_ohlcv("SPY") + fmp_ohlcv("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime). Can still use run_script with market_regime_detector for cross-asset breadth if needed.
 3. fmp_screener to find candidates (volume > 1M, mkt_cap > 2B)
-4. For each candidate: fmp_ohlcv(limit=20), run_script indicators, fmp_news, fmp_earnings_calendar
+4. For each candidate: fmp_ohlcv(ticker) — all indicators pre-calculated. Add fmp_news, fmp_earnings_calendar for qualitative context.
 5. Write today_context with regime + top 5-10 setups
 6. Write watchlist (max 12)
 7. hypothesis_log new theses as "formed"
@@ -102,7 +102,7 @@ No proposed_change in health_check — system rejects it.
 
 ### Market Data
 fmp_screener(market_cap_more_than, volume_more_than, exchange, limit)
-fmp_ohlcv(ticker, limit=20) — use limit=60 for market_regime_detector (needs MA50)
+fmp_ohlcv(ticker, limit=5) — returns full TA payload (indicators, ICs, Alpha101). limit=raw candles exposed only.
 fmp_news(tickers, limit=10)
 fmp_earnings_calendar(from_date, to_date)
 serper_search(query)
@@ -362,12 +362,26 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "fmp_ohlcv",
-        "description": "Get daily OHLCV for a ticker. Default 20 days. Use limit=60 for market_regime_detector.",
+        "description": (
+            "Get a pre-calculated professional TA payload for a ticker (1D and 1W). "
+            "Returns: meta (symbol, as_of, price), ohlcv_1d/1w (last `limit` candles, default 5), "
+            "momentum_1d (rsi_7/14/21 each with cur+7d/14d/30d/90d hi/lo/avg; macd with crossover+divergence; stoch_5/stoch_14 with k/d/zone/crossover; mfi with divergence), "
+            "trend_1d (ema_samples every-5-candles for ema21/55/89 + alignment + price_vs_ema_pct; adx/di_plus/di_minus/trend_strength; vwap/slope/price_vs_vwap_pct), "
+            "trend_1w (ema_samples ema21/55; adx/trend_strength), "
+            "volatility_1d (atr/atr_pct/atr_regime; bollinger upper/mid/lower 1sd+2sd + pct_b + bandwidth + squeeze bool), "
+            "volume_1d (vol_ratio_1d/1w + 10d hi/lo; obv slope/vs_price/trend_days), "
+            "price_structure (sr_1d: 3 support + 3 resistance with price/strength/last_tested; sr_1w: 2+2; pivot_1d: pp/r1/r2/s1/s2; wk52: hi/lo/pct/dist), "
+            "ics_1d (order_blocks max 3 with type/date/ob_high/ob_low/ob_mid/tested/broken/stale; fvgs max 3; liquidity_levels max 4; market_structure with structure/last_hh/last_hl/msb; breaker_blocks max 2), "
+            "ics_1w (order_blocks max 2; market_structure), "
+            "patterns_1d/1w (list of {pattern, date, signal} for last 5/3 candles), "
+            "alpha101 (20 WorldQuant signals: a1_momentum_peak, a2_vol_accel_corr, a3_open_vol_ranked, a4_support_floor, a6_open_vol_raw, a7_vol_gated, a9_regime_5d, a10_regime_4d, a12_capitulation, a20_gap_structure, a27_vwap_participation, a31_mean_rev, a32_vwap_persist, a34_vol_squeeze, a39_low_vol_drop, a41_geo_mid_vwap, a49_accel, a50_distribution, a55_range_vol_corr, a101_bar_quality). "
+            "Priority alphas: a101_bar_quality (candlestick conviction), a12_capitulation (1-day vol-spike+drop), a34_vol_squeeze (relative squeeze), a49_accel (momentum acceleration), a7_vol_gated (volume-confirmed direction)."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
                 "ticker": {"type": "string"},
-                "limit": {"type": "integer"},
+                "limit": {"type": "integer", "description": "Raw OHLCV candles to expose (default 5). Does not affect indicator calculation depth."},
             },
             "required": ["ticker"],
         },
