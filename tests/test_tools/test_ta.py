@@ -399,3 +399,54 @@ def test_calc_patterns_empty_when_no_signal():
     result = calc_patterns(arr, arr, arr, arr,
                            [f"2026-01-{i+1:02d}" for i in range(n)], lookback=5)
     assert result == []
+
+
+# ── Alpha101 tests ────────────────────────────────────────────────────────
+
+def test_calc_alpha101_returns_all_keys(ohlcv_260):
+    from scheduler.tools._ta import calc_alpha101, calc_vwap
+    vwap_result = calc_vwap(ohlcv_260["high"], ohlcv_260["low"],
+                             ohlcv_260["close"], ohlcv_260["volume"],
+                             ohlcv_260["dates"])
+    result = calc_alpha101(
+        ohlcv_260["open"], ohlcv_260["high"], ohlcv_260["low"],
+        ohlcv_260["close"], ohlcv_260["volume"], vwap_result["vwap_series"]
+    )
+    expected_keys = [
+        "a1_momentum_peak", "a2_vol_accel_corr", "a3_open_vol_ranked",
+        "a4_support_floor", "a6_open_vol_raw", "a7_vol_gated",
+        "a9_regime_5d", "a10_regime_4d", "a12_capitulation",
+        "a20_gap_structure", "a27_vwap_participation", "a31_mean_rev",
+        "a32_vwap_persist", "a34_vol_squeeze", "a39_low_vol_drop",
+        "a41_geo_mid_vwap", "a49_accel", "a50_distribution",
+        "a55_range_vol_corr", "a101_bar_quality",
+    ]
+    for key in expected_keys:
+        assert key in result, f"Missing key: {key}"
+
+
+def test_alpha101_bar_quality_range(ohlcv_260):
+    from scheduler.tools._ta import calc_alpha101, calc_vwap
+    vwap_result = calc_vwap(ohlcv_260["high"], ohlcv_260["low"],
+                             ohlcv_260["close"], ohlcv_260["volume"],
+                             ohlcv_260["dates"])
+    result = calc_alpha101(
+        ohlcv_260["open"], ohlcv_260["high"], ohlcv_260["low"],
+        ohlcv_260["close"], ohlcv_260["volume"], vwap_result["vwap_series"]
+    )
+    bq = result["a101_bar_quality"]
+    assert bq is None or -1.05 <= bq <= 1.05
+
+
+def test_alpha9_regime_switching():
+    from scheduler.tools._ta import _alpha9
+    # All positive returns → follow trend
+    close_up = np.array([100.0, 101.0, 102.0, 103.0, 104.0, 105.0, 106.0])
+    result = _alpha9(close_up, window=5)
+    assert result > 0  # uptrend: follow it
+
+    # Mixed → mean revert (negate today's delta)
+    close_mixed = np.array([100.0, 102.0, 99.0, 101.0, 98.0, 100.0, 97.0])
+    result_mixed = _alpha9(close_mixed, window=5)
+    # today dropped → mean revert → positive (fade the drop)
+    assert result_mixed > 0

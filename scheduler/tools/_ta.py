@@ -913,3 +913,324 @@ def calc_patterns(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
                 unique.append({"pattern": item["pattern"], "date": item["date"], "signal": item["signal"]})
 
     return unique[:max_patterns]
+
+
+# ─── Alpha101 ────────────────────────────────────────────────────────────────
+# Adapted from WorldQuant 101 Formulaic Alphas (Kakushadze 2016).
+# Cross-sectional rank() adapted to single-stock 60-day rolling percentile rank.
+# All functions return a scalar float (or None on insufficient data).
+
+_RANK_WIN = 60  # rolling window for ts_rank_pct adaptations
+
+
+def _safe(val) -> Optional[float]:
+    """Round to 4dp, None on NaN/inf."""
+    return _nan_to_none(val)
+
+
+def _alpha1(close: np.ndarray, returns: np.ndarray) -> Optional[float]:
+    """Recency of momentum peak. High=peak was recent (bull). Low=peak stale (bear)."""
+    window, argmax_win = 20, 5
+    if len(close) < window + argmax_win:
+        return None
+    series = np.empty(argmax_win)
+    for k in range(argmax_win):
+        idx = -(argmax_win - k)
+        r = float(returns[idx]) if idx < -1 else float(returns[-1])
+        c = float(close[idx])
+        val = float(np.std(returns[idx - window: idx], ddof=1)) if r < 0 else c
+        series[k] = np.sign(val) * (val ** 2)
+    return float(np.argmax(series))
+
+
+def _alpha2(open_: np.ndarray, close: np.ndarray, volume: np.ndarray) -> Optional[float]:
+    """Volume acceleration vs intraday gain correlation. Pos=accumulation."""
+    if len(close) < 8:
+        return None
+    log_vol = np.log(np.maximum(volume, 1.0))
+    d2_log_vol = np.diff(np.diff(log_vol))
+    intraday = (close - open_) / np.maximum(open_, 1e-10)
+    win = 6
+    dv = d2_log_vol[-win:]
+    ir = intraday[-win - 2: -2] if len(intraday) >= win + 2 else intraday[:win]
+    if len(dv) < win or len(ir) < win or np.std(dv) < 1e-10 or np.std(ir) < 1e-10:
+        return None
+    return _safe(-float(np.corrcoef(dv, ir)[0, 1]))
+
+
+def _alpha3(open_: np.ndarray, volume: np.ndarray) -> Optional[float]:
+    """Open rising on low volume = positive (squeeze). Neg = distribution."""
+    win = 10
+    if len(open_) < win:
+        return None
+    o, v = open_[-win:].astype(float), volume[-win:].astype(float)
+    if np.std(o) < 1e-10 or np.std(v) < 1e-10:
+        return 0.0
+    return _safe(-float(np.corrcoef(o, v)[0, 1]))
+
+
+def _alpha4(low: np.ndarray, window: int = 9) -> Optional[float]:
+    """Rising floor = overbought floor → mean reversion expected."""
+    if len(low) < window:
+        return None
+    sl = low[-window:]
+    return _safe(-float(np.sum(sl <= sl[-1])) / window)
+
+
+def _alpha6(open_: np.ndarray, volume: np.ndarray, window: int = 10) -> Optional[float]:
+    """Raw open-volume correlation. Pos=thin-market rally."""
+    if len(open_) < window:
+        return None
+    o, v = open_[-window:].astype(float), volume[-window:].astype(float)
+    if np.std(o) < 1e-10 or np.std(v) < 1e-10:
+        return 0.0
+    return _safe(-float(np.corrcoef(o, v)[0, 1]))
+
+
+def _alpha7(close: np.ndarray, volume: np.ndarray,
+            adv_win: int = 20, delta_win: int = 7, rank_win: int = 60) -> Optional[float]:
+    """Volume-gated directional momentum. Returns 1.0 (neutral) on low-volume days."""
+    if len(close) < rank_win + delta_win:
+        return None
+    adv20 = float(np.mean(volume[-adv_win:]))
+    if volume[-1] <= adv20:
+        return 1.0
+    delta7 = close[-1] - close[-1 - delta_win]
+    deltas = np.array([abs(close[i] - close[i - delta_win])
+                       for i in range(delta_win, len(close))])[-rank_win:]
+    rank = float(np.sum(deltas <= abs(delta7))) / rank_win
+    return _safe(-rank * float(np.sign(delta7)))
+
+
+def _alpha9(close: np.ndarray, window: int = 5) -> Optional[float]:
+    """Auto-switch: trend-follow in consistent trends, mean-revert in choppy markets."""
+    if len(close) < window + 1:
+        return None
+    deltas = np.diff(close[-(window + 1):])
+    today_delta = float(close[-1] - close[-2])
+    if float(np.min(deltas)) > 0:
+        return today_delta
+    if float(np.max(deltas)) < 0:
+        return today_delta
+    return -today_delta
+
+
+def _alpha10(close: np.ndarray) -> Optional[float]:
+    """Same as alpha9 but 4-day window (catches shorter regime bursts)."""
+    return _alpha9(close, window=4)
+
+
+def _alpha12(close: np.ndarray, volume: np.ndarray) -> Optional[float]:
+    """Capitulation detector: volume spike + price drop = positive (buy signal)."""
+    if len(close) < 2:
+        return None
+    return _safe(float(np.sign(volume[-1] - volume[-2])) * -(close[-1] - close[-2]))
+
+
+def _alpha20(open_: np.ndarray, high: np.ndarray,
+             low: np.ndarray, close: np.ndarray) -> Optional[float]:
+    """Gap structure: how today's open compares to yesterday's H/L/C."""
+    if len(open_) < 2:
+        return None
+    avg = max(float(close[-2]), 1e-10)
+    gf_high  = (open_[-1] - high[-2])  / avg
+    gf_close = (open_[-1] - close[-2]) / avg
+    gf_low   = (open_[-1] - low[-2])   / avg
+    return _safe(-float(gf_high + gf_close + gf_low))
+
+
+def _alpha27(volume: np.ndarray, vwap: np.ndarray,
+             corr_win: int = 6, rank_win: int = 60) -> Optional[float]:
+    """Vol-VWAP correlation rank. Dislocation = +1 (opportunity). Aligned = -1."""
+    if len(volume) < rank_win + corr_win:
+        return None
+    corrs = []
+    for i in range(len(volume) - corr_win + 1):
+        v_sl = volume[i: i + corr_win].astype(float)
+        w_sl = vwap[i: i + corr_win].astype(float)
+        if np.std(v_sl) < 1e-10 or np.std(w_sl) < 1e-10:
+            corrs.append(0.0)
+        else:
+            corrs.append(float(np.corrcoef(v_sl, w_sl)[0, 1]))
+    avg_corr = float(np.mean(corrs[-2:]))
+    median = float(np.median(corrs[-rank_win:]))
+    return -1.0 if avg_corr > median else 1.0
+
+
+def _alpha31(close: np.ndarray, low: np.ndarray, volume: np.ndarray,
+             delta_long: int = 10, delta_short: int = 3,
+             adv_win: int = 20, corr_win: int = 12) -> Optional[float]:
+    """Multi-timeframe mean reversion with volume-at-low confirmation."""
+    if len(close) < adv_win + corr_win + delta_long:
+        return None
+    delta10 = np.array([close[i] - close[i - delta_long]
+                        for i in range(delta_long, len(close))])[-delta_long:]
+    weights = np.arange(1, delta_long + 1, dtype=float)
+    weights /= weights.sum()
+    comp1 = 1.0 - float(np.sum(delta10 <= delta10[-1])) / len(delta10)
+    comp2 = -float(np.sign(close[-1] - close[-1 - delta_short]))
+    adv20 = np.array([np.mean(volume[max(0, i - adv_win): i])
+                      for i in range(adv_win, len(volume))])
+    l_sl  = low[-corr_win:].astype(float)
+    a_sl  = adv20[-corr_win:].astype(float)
+    if np.std(l_sl) < 1e-10 or np.std(a_sl) < 1e-10:
+        comp3 = 0.0
+    else:
+        comp3 = float(np.sign(np.corrcoef(l_sl, a_sl)[0, 1]))
+    return _safe(comp1 + comp2 + comp3)
+
+
+def _alpha32(close: np.ndarray, vwap: np.ndarray,
+             short_win: int = 7, long_win: int = 230, lag: int = 5) -> Optional[float]:
+    """Long-range VWAP autocorrelation + short-term mean reversion."""
+    if len(close) < long_win + lag:
+        return None
+    mean7 = float(np.mean(close[-short_win:]))
+    std7  = float(np.std(close[-short_win:])) or 1.0
+    comp1 = (mean7 - close[-1]) / std7
+    vw_sl = vwap[-long_win:].astype(float)
+    cl_sl = close[-long_win - lag: -lag].astype(float)
+    if np.std(vw_sl) < 1e-10 or np.std(cl_sl) < 1e-10:
+        comp2 = 0.0
+    else:
+        comp2 = float(np.corrcoef(vw_sl, cl_sl)[0, 1])
+    return _safe(comp1 + 20.0 * comp2)
+
+
+def _alpha34(close: np.ndarray, returns: np.ndarray,
+             short_vol: int = 2, long_vol: int = 5, rank_win: int = 60) -> Optional[float]:
+    """Short/long vol ratio squeeze. High = vol compressed (pre-breakout)."""
+    if len(returns) < rank_win + long_vol:
+        return None
+    ratios = []
+    for i in range(long_vol - 1, len(returns)):
+        s = float(np.std(returns[i - short_vol + 1: i + 1], ddof=1)) if short_vol > 1 else abs(returns[i])
+        l = float(np.std(returns[i - long_vol + 1: i + 1], ddof=1)) or 1e-10
+        ratios.append(s / l)
+    if len(ratios) < rank_win:
+        return None
+    recent = np.array(ratios[-rank_win:])
+    vol_rank = float(np.sum(recent <= recent[-1])) / rank_win
+    dabs = np.abs(np.diff(close))[-rank_win:]
+    d_rank = float(np.sum(dabs <= dabs[-1])) / rank_win if len(dabs) >= rank_win else 0.5
+    return _safe((1.0 - vol_rank) + (1.0 - d_rank))
+
+
+def _alpha39(close: np.ndarray, volume: np.ndarray,
+             delta_win: int = 7, adv_win: int = 20,
+             decay_win: int = 9, rank_win: int = 60) -> Optional[float]:
+    """Drop on low relative volume = bounce setup (positive)."""
+    if len(close) < rank_win + delta_win:
+        return None
+    deltas = np.array([close[i] - close[i - delta_win]
+                       for i in range(delta_win, len(close))])[-rank_win:]
+    d_rank = float(np.sum(deltas <= deltas[-1])) / rank_win
+    comp1 = -d_rank
+    adv20 = float(np.mean(volume[-adv_win:]))
+    ratio = volume[-decay_win:] / max(adv20, 1e-10)
+    w = np.arange(1, decay_win + 1, dtype=float)
+    w /= w.sum()
+    decay_val = float(np.dot(w, ratio[-decay_win:]))
+    comp2 = 1.0 - min(decay_val, 2.0) / 2.0
+    return _safe(comp1 * comp2)
+
+
+def _alpha41(high: np.ndarray, low: np.ndarray, vwap: np.ndarray) -> Optional[float]:
+    """Geometric midpoint vs VWAP. Pos = buying pressure above VWAP."""
+    if len(high) < 1:
+        return None
+    geo_mid = float(np.sqrt(max(high[-1] * low[-1], 0)))
+    return _safe(geo_mid - float(vwap[-1]))
+
+
+def _alpha49(close: np.ndarray, threshold: float = -0.1) -> Optional[float]:
+    """Velocity acceleration: +1 if recent momentum accelerated, else mean-revert."""
+    if len(close) < 21:
+        return None
+    vel_old = (float(close[-11]) - float(close[-21])) / 10.0
+    vel_new = (float(close[-1])  - float(close[-11])) / 10.0
+    if (vel_old - vel_new) < threshold:
+        return 1.0
+    return _safe(-(close[-1] - close[-2]))
+
+
+def _alpha50(high: np.ndarray, volume: np.ndarray,
+             avg_win: int = 20, corr_win: int = 5) -> Optional[float]:
+    """Highs suppressed while volume rises = distribution (positive = bearish)."""
+    if len(high) < avg_win + corr_win:
+        return None
+    avg_h = float(np.mean(high[-avg_win:]))
+    deficit = avg_h - float(high[-1])
+    deficit_series = np.array([np.mean(high[i - avg_win + 1: i + 1]) - high[i]
+                                for i in range(avg_win - 1, len(high))])[-avg_win:]
+    d_rank = float(np.sum(deficit_series <= deficit)) / avg_win
+    h_sl = high[-corr_win:].astype(float)
+    v_sl = volume[-corr_win:].astype(float)
+    if np.std(h_sl) < 1e-10 or np.std(v_sl) < 1e-10:
+        c_rank = 0.5
+    else:
+        c = float(np.corrcoef(h_sl, v_sl)[0, 1])
+        c_arr = np.array([float(np.corrcoef(high[i: i + corr_win],
+                                             volume[i: i + corr_win])[0, 1])
+                           for i in range(len(high) - corr_win)])
+        c_rank = float(np.sum(c_arr <= c)) / len(c_arr) if len(c_arr) > 0 else 0.5
+    return _safe(-d_rank * c_rank)
+
+
+def _alpha55(close: np.ndarray, high: np.ndarray, low: np.ndarray,
+             volume: np.ndarray, hl_win: int = 12, corr_win: int = 6) -> Optional[float]:
+    """Close-in-range vs volume: quiet near-high = positive (breakout potential)."""
+    if len(close) < hl_win + corr_win:
+        return None
+    norm_pos = []
+    for i in range(hl_win - 1, len(close)):
+        h = float(np.max(high[i - hl_win + 1: i + 1]))
+        l = float(np.min(low[i - hl_win + 1: i + 1]))
+        rng = h - l
+        norm_pos.append((close[i] - l) / rng if rng > 1e-10 else 0.5)
+    np_sl = np.array(norm_pos[-corr_win:])
+    v_sl  = volume[-corr_win:].astype(float)
+    if np.std(np_sl) < 1e-10 or np.std(v_sl) < 1e-10:
+        return 0.0
+    return _safe(-float(np.corrcoef(np_sl, v_sl)[0, 1]))
+
+
+def _alpha101(open_: np.ndarray, high: np.ndarray,
+              low: np.ndarray, close: np.ndarray) -> Optional[float]:
+    """Bar quality ratio: (close-open)/(high-low+0.001). Range ≈ [-1, +1]."""
+    if len(close) < 1:
+        return None
+    body  = float(close[-1] - open_[-1])
+    range_ = float(high[-1] - low[-1]) + 0.001
+    return _safe(body / range_)
+
+
+def calc_alpha101(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
+                  close: np.ndarray, volume: np.ndarray,
+                  vwap_series: np.ndarray) -> dict:
+    """Compute all 20 WorldQuant Alpha101 signals. Returns flat dict of scalars."""
+    ret = compute_returns(close)
+    # Pad returns to same length as close (prepend NaN for first bar)
+    ret_full = np.concatenate([[float("nan")], ret])
+    return {
+        "a1_momentum_peak":    _safe(_alpha1(close, ret_full)),
+        "a2_vol_accel_corr":   _safe(_alpha2(open_, close, volume)),
+        "a3_open_vol_ranked":  _safe(_alpha3(open_, volume)),
+        "a4_support_floor":    _safe(_alpha4(low)),
+        "a6_open_vol_raw":     _safe(_alpha6(open_, volume)),
+        "a7_vol_gated":        _safe(_alpha7(close, volume)),
+        "a9_regime_5d":        _safe(_alpha9(close)),
+        "a10_regime_4d":       _safe(_alpha10(close)),
+        "a12_capitulation":    _safe(_alpha12(close, volume)),
+        "a20_gap_structure":   _safe(_alpha20(open_, high, low, close)),
+        "a27_vwap_participation": _safe(_alpha27(volume, vwap_series)),
+        "a31_mean_rev":        _safe(_alpha31(close, low, volume)),
+        "a32_vwap_persist":    _safe(_alpha32(close, vwap_series)),
+        "a34_vol_squeeze":     _safe(_alpha34(close, ret_full[1:])),
+        "a39_low_vol_drop":    _safe(_alpha39(close, volume)),
+        "a41_geo_mid_vwap":    _safe(_alpha41(high, low, vwap_series)),
+        "a49_accel":           _safe(_alpha49(close)),
+        "a50_distribution":    _safe(_alpha50(high, volume)),
+        "a55_range_vol_corr":  _safe(_alpha55(close, high, low, volume)),
+        "a101_bar_quality":    _safe(_alpha101(open_, high, low, close)),
+    }
