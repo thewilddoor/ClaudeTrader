@@ -14,6 +14,7 @@ def set_test_env(monkeypatch):
     monkeypatch.setenv("TELEGRAM_CHAT_ID", "test_tg_chat")
     monkeypatch.setenv("LETTA_SERVER_URL", "http://localhost:8283")
     monkeypatch.setenv("SCRIPTS_DIR", "scripts")
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "test_anthropic_key")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test_openrouter_key")
+    monkeypatch.setenv("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet")
     monkeypatch.setenv("LETTA_AGENT_NAME", "test_trader")
     monkeypatch.setenv("ALPACA_MCP_URL", "http://localhost:8000/sse")
