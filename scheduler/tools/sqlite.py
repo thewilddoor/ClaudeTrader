@@ -66,6 +66,23 @@ CREATE TABLE IF NOT EXISTS strategy_versions (
 );
 """
 
+_MEMORY_SCHEMA = """
+CREATE TABLE IF NOT EXISTS memory (
+    key        TEXT PRIMARY KEY,
+    value      TEXT NOT NULL,
+    updated_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
+
+CREATE TABLE IF NOT EXISTS session_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_name TEXT NOT NULL,
+    date         TEXT NOT NULL,
+    raw_response TEXT NOT NULL,
+    digest       TEXT,
+    logged_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+"""
+
 
 def _connect(read_only: bool = False) -> sqlite3.Connection:
     if read_only:
@@ -98,6 +115,25 @@ def bootstrap_db() -> None:
                 conn.execute(stmt)
             except sqlite3.OperationalError:
                 pass
+        conn.commit()
+    finally:
+        conn.close()
+
+
+def bootstrap_memory_table(initial_values: dict) -> None:
+    """Create memory and session_log tables. Insert initial_values without overwriting existing rows.
+
+    Idempotent — safe to call on every startup.
+    """
+    conn = _connect()
+    try:
+        conn.executescript(_MEMORY_SCHEMA)
+        for key, value in initial_values.items():
+            conn.execute(
+                "INSERT INTO memory (key, value) VALUES (?, ?) "
+                "ON CONFLICT(key) DO NOTHING",
+                (key, value),
+            )
         conn.commit()
     finally:
         conn.close()
