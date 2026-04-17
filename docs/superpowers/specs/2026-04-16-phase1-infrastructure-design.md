@@ -922,6 +922,152 @@ No other changes to strategy_gate.py. The probation/promote/revert logic is unto
 
 ---
 
+## Session Digest System
+
+### Problem it solves
+
+Memory blocks capture *what* was decided. They don't capture *why*, *what was considered and 
+rejected*, or *what conditions would invalidate current positions*. This reasoning chain is the 
+most valuable part of a session — without it, the next session starts blind to the logic that 
+drove the prior one.
+
+### Design
+
+**Storage:** New `session_log` table in `trades.db`:
+```sql
+CREATE TABLE IF NOT EXISTS session_log (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    session_name TEXT NOT NULL,
+    date         TEXT NOT NULL,
+    raw_response TEXT NOT NULL,   -- Claude's full session response text
+    digest       TEXT,            -- filled in by cheap model post-session
+    logged_at    TEXT NOT NULL DEFAULT (datetime('now'))
+);
+```
+
+**Flow:**
+```
+Session completes → AgentCore saves raw_response to session_log
+                  → SessionDigester.summarize(raw_response, session_name) called async
+                  → Haiku 4.5 produces structured digest → stored in session_log.digest
+Next session:     → Last 2 digests fetched and injected into recent_context
+```
+
+**SessionDigester class** (~40 lines in `scheduler/digester.py`):
+```python
+class SessionDigester:
+    def __init__(self, api_key: str):
+        self.client = anthropic.Anthropic(api_key=api_key)
+    
+    def summarize(self, raw_response: str, session_name: str) -> str:
+        prompt = DIGEST_PROMPT_TEMPLATE.format(
+            session_name=session_name,
+            response=raw_response[:6000],  # cap at 6k chars — all sessions fit
+        )
+        response = self.client.messages.create(
+            model="claude-haiku-4-5-20251001",
+            max_tokens=400,
+            messages=[{"role": "user", "content": prompt}]
+        )
+        return response.content[0].text
+```
+
+**The digest prompt (DIGEST_PROMPT_TEMPLATE):**
+```
+You are summarizing a trading session for the AI fund manager that will run the NEXT session.
+Your summary must preserve the reasoning chain so the next session starts with full context.
+
+Session: {session_name}
+Response: {response}
+
+Write a structured digest with exactly these 4 sections. Be specific — include tickers, 
+prices, indicator values, and conditions wherever they appear in the response.
+
+DECISIONS MADE:
+For each action taken: what was done, why (specific signals/data that justified it), 
+and what conditions would invalidate it.
+Example: "Opened NVDA long at $875 — RSI 58 pullback with ADX 31 confirming trend, 
+volume 1.8× avg. Thesis breaks if price closes below 9-EMA ($869) or volume dries up."
+
+DECISIONS NOT MADE:
+For each setup considered but skipped: what it was, why it was passed on, 
+and what would need to change for it to become actionable.
+Example: "Skipped TSLA short — setup valid but VIX rising fast, regime shift risk. 
+Would reconsider if VIX stabilizes and TSLA breaks below $188 support on volume."
+
+OPEN UNCERTAINTIES:
+What was unclear, ambiguous, or being watched. What information would resolve it.
+Example: "AAPL thesis unclear — strong RS but earnings tomorrow. Watching after-hours 
+reaction before forming view."
+
+KEY CONDITIONS TO WATCH:
+Specific price levels, events, or signals that matter for active positions or pending setups.
+Example: "NVDA: 9-EMA at $869 is the line. SPY: needs to hold $520 for bull thesis."
+
+Keep each section to 2-4 bullet points. Total output under 350 words.
+```
+
+**Injection into recent_context:**
+```python
+def build_recent_context(..., last_digests: list[dict]) -> str:
+    digest_section = ""
+    if last_digests:
+        digest_section = "\n**Previous Session Digests:**\n"
+        for d in last_digests[-2:]:  # last 2 only
+            digest_section += f"[{d['session_name']} {d['date']}]\n{d['digest']}\n\n"
+    return f"""## Recent Context (scheduler-injected)
+...
+{digest_section}"""
+```
+
+### Cost
+
+- Haiku 4.5 input: ~1,500 tokens per session × $0.001/MTok = $0.0000015/session
+- Haiku 4.5 output: ~350 tokens × $0.005/MTok = $0.00000175/session  
+- **~$0.002/day total** — effectively free
+
+### What it captures that memory blocks miss
+
+| Memory blocks capture | Session digest captures |
+|----------------------|------------------------|
+| Final watchlist entries | Why each entry was added and what would remove it |
+| Trades opened/closed | Signals that triggered the trade, invalidation conditions |
+| Performance snapshot | Specific patterns noticed mid-session |
+| Observations (outcome) | The reasoning path that produced the observation |
+| Nothing | Skipped trades and why — what would make them actionable |
+| Nothing | Uncertainty and what would resolve it |
+| Nothing | Active price levels and events to monitor |
+
+### AgentCore changes
+
+`run_session` saves to session_log after each call, then triggers the digest:
+```python
+def run_session(self, session_name: str, user_message: str) -> str:
+    ...
+    response_text = extract_text(response)
+    
+    # Save raw response
+    self.memory.log_session(session_name, date.today().isoformat(), response_text)
+    
+    # Summarize async (does not block next session — runs in background thread)
+    threading.Thread(
+        target=self._digest_session,
+        args=(session_name, response_text),
+        daemon=True,
+    ).start()
+    
+    return response_text
+
+def _digest_session(self, session_name: str, raw_response: str) -> None:
+    digest = self.digester.summarize(raw_response, session_name)
+    self.memory.update_session_digest(session_name, digest)
+```
+
+Digest runs in a background thread so it never delays the scheduler. It completes well before 
+the next session fires (sessions are hours apart).
+
+---
+
 ## Testing Plan
 
 - [ ] Unit test `MemoryStore`: read/write/read_all with tmp db
@@ -933,6 +1079,11 @@ No other changes to strategy_gate.py. The probation/promote/revert logic is unto
 - [ ] Integration test `bootstrap.py`: verify memory table created with correct initial values
 - [ ] Integration test strategy gate interface: `update_memory_block` → `get_memory_block` round-trip
 - [ ] Regression test: existing sqlite.py and alpaca.py tool tests still pass
+- [ ] Unit test `SessionDigester.summarize`: mock Haiku client, verify 4-section output structure
+- [ ] Unit test `MemoryStore.log_session` and `update_session_digest`: write → read round-trip
+- [ ] Unit test `build_recent_context` with digests: verify last 2 injected, oldest dropped
+- [ ] Unit test background thread: verify digest runs without blocking run_session return
+- [ ] Integration test: full session → log → digest → injected into next session's recent_context
 
 ---
 
