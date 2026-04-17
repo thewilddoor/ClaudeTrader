@@ -1,21 +1,4 @@
 services:
-  letta:
-    image: letta/letta:latest
-    ports:
-      - "8283:8283"
-    volumes:
-      - letta-db:/root/.letta
-      - trades-db:/data/trades
-    environment:
-      - OPENAI_API_KEY=${OPENROUTER_API_KEY}
-    restart: unless-stopped
-    healthcheck:
-      test: ["CMD-SHELL", "python3 -c \"import urllib.request; urllib.request.urlopen('http://localhost:8283/v1/health', timeout=5)\" 2>/dev/null || exit 1"]
-      interval: 15s
-      timeout: 10s
-      retries: 12
-      start_period: 90s
-
   alpaca-mcp:
     build:
       context: .
@@ -44,13 +27,10 @@ services:
     env_file:
       - .env
     depends_on:
-      letta:
-        condition: service_healthy
       alpaca-mcp:
         condition: service_healthy
     restart: unless-stopped
 
 volumes:
-  letta-db:
   agent-state:
   trades-db:
