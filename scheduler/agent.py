@@ -438,6 +438,29 @@ TOOL_SCHEMAS = [
             "required": ["code"],
         },
     },
+    {
+        "name": "update_memory_block",
+        "description": (
+            "Write or overwrite one of your persistent memory blocks. "
+            "Valid blocks: watchlist, today_context, performance_snapshot, observations. "
+            "strategy_doc is read-only — use proposed_change in your JSON response to evolve strategy. "
+            "Call this at the END of every session to persist your analysis."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "block_name": {
+                    "type": "string",
+                    "enum": ["watchlist", "today_context", "performance_snapshot", "observations"],
+                },
+                "value": {
+                    "type": "string",
+                    "description": "Full replacement content for the block.",
+                },
+            },
+            "required": ["block_name", "value"],
+        },
+    },
 ]
 
 
@@ -580,7 +603,17 @@ class AgentCore:
                 tool_results = []
                 for block in response.content:
                     if block.type == "tool_use":
-                        result = _execute_tool(block.name, block.input)
+                        if block.name == "update_memory_block":
+                            block_name = block.input.get("block_name", "")
+                            value = block.input.get("value", "")
+                            allowed = {"watchlist", "today_context", "performance_snapshot", "observations"}
+                            if block_name in allowed:
+                                self.memory.write(block_name, value)
+                                result = {"ok": True, "block": block_name, "chars": len(value)}
+                            else:
+                                result = {"error": f"Unknown or read-only block: {block_name}"}
+                        else:
+                            result = _execute_tool(block.name, block.input)
                         tool_results.append({
                             "type": "tool_result",
                             "tool_use_id": block.id,
