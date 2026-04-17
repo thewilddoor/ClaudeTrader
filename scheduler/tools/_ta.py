@@ -222,3 +222,149 @@ def calc_mfi(high: np.ndarray, low: np.ndarray,
 
     return {"cur": _nan_to_none(mfi[-1]), "14d_hi": hi14, "14d_lo": lo14,
             "divergence": divergence}
+
+
+# ─── Trend ───────────────────────────────────────────────────────────────────
+
+def calc_ema_samples(close: np.ndarray, dates: list,
+                     periods: list = None, sample_every: int = 5) -> dict:
+    """Triple EMA sampled every `sample_every` candles (5 sample points returned).
+
+    Args:
+        close: Price array, oldest-first.
+        dates: Corresponding date strings.
+        periods: EMA periods to compute (e.g. [21,55,89] for 1D, [21,55] for 1W).
+        sample_every: Return every Nth value (default 5 to compress output).
+    """
+    if periods is None:
+        periods = [21, 55, 89]
+    c = close.astype("f8")
+    emas = {}
+    for p in periods:
+        emas[p] = talib.EMA(c, timeperiod=p)
+
+    # Sample every 5th candle from the end, 5 points total
+    n = len(close)
+    indices = list(range(n - 1, max(n - 1 - sample_every * 5, -1), -sample_every))[:5]
+    indices.reverse()
+
+    samples = []
+    for idx in indices:
+        point = {"date": dates[idx]}
+        for p in periods:
+            val = emas[p][idx]
+            point[f"ema{p}"] = _nan_to_none(val)
+        samples.append(point)
+
+    # Alignment at current bar
+    cur_vals = {p: emas[p][-1] for p in periods}
+    sorted_periods = sorted(periods)
+    alignment = "mixed"
+    if all(not np.isnan(cur_vals[p]) for p in sorted_periods):
+        vals = [cur_vals[p] for p in sorted_periods]
+        if all(vals[i] > vals[i + 1] for i in range(len(vals) - 1)):
+            alignment = "bull"
+        elif all(vals[i] < vals[i + 1] for i in range(len(vals) - 1)):
+            alignment = "bear"
+
+    price_vs = {}
+    for p in periods[:2]:  # report vs first two EMAs (21 and 55)
+        ev = emas[p][-1]
+        if not np.isnan(ev) and ev != 0:
+            price_vs[f"price_vs_ema{p}_pct"] = round((close[-1] - ev) / ev * 100, 4)
+        else:
+            price_vs[f"price_vs_ema{p}_pct"] = None
+
+    return {"ema_samples": samples, "alignment": alignment, **price_vs}
+
+
+def calc_adx(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+             timeframe: str = "1d") -> dict:
+    """ADX(14) with trend_strength classification.
+
+    1D returns: adx, di_plus, di_minus, trend_strength, 14d_hi, 14d_lo
+    1W returns: adx, trend_strength (no DI to save tokens)
+    """
+    h, l, c = high.astype("f8"), low.astype("f8"), close.astype("f8")
+    adx_vals = talib.ADX(h, l, c, timeperiod=14)
+    cur_adx = _nan_to_none(adx_vals[-1])
+
+    trend_strength = "ranging"
+    if cur_adx is not None:
+        if cur_adx > 25:
+            trend_strength = "strong"
+        elif cur_adx >= 20:
+            trend_strength = "trending"
+
+    hi14, lo14, _ = _rolling_hi_lo_avg(adx_vals, 14)
+
+    if timeframe == "1w":
+        return {"adx": cur_adx, "trend_strength": trend_strength}
+
+    plus_di = talib.PLUS_DI(h, l, c, timeperiod=14)
+    minus_di = talib.MINUS_DI(h, l, c, timeperiod=14)
+    return {
+        "adx": cur_adx,
+        "di_plus": _nan_to_none(plus_di[-1]),
+        "di_minus": _nan_to_none(minus_di[-1]),
+        "trend_strength": trend_strength,
+        "14d_hi": hi14,
+        "14d_lo": lo14,
+    }
+
+
+def calc_vwap(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+              volume: np.ndarray, dates: list) -> dict:
+    """Weekly-anchored VWAP (anchored to Monday open of current week).
+
+    Also returns vwap_series (full array) for use by Alpha27/32/41.
+    """
+    # Compute VWAP anchored to Monday of the current week
+    from datetime import date as dt
+    today = dt.fromisoformat(dates[-1])
+    monday = today - timedelta(days=today.weekday())
+    monday_str = monday.isoformat()
+
+    # Find anchor index
+    anchor_idx = 0
+    for i, d in enumerate(dates):
+        if d >= monday_str:
+            anchor_idx = i
+            break
+
+    typical = (high + low + close) / 3.0
+    cum_tp_vol = np.cumsum(typical * volume)
+    cum_vol = np.cumsum(volume)
+
+    # Anchored VWAP: reset cumulation at anchor
+    anchor_tp_vol = cum_tp_vol[anchor_idx - 1] if anchor_idx > 0 else 0.0
+    anchor_vol = cum_vol[anchor_idx - 1] if anchor_idx > 0 else 0.0
+    anchored_cum_tp_vol = cum_tp_vol - anchor_tp_vol
+    anchored_cum_vol = cum_vol - anchor_vol
+
+    vwap_series = np.where(
+        anchored_cum_vol > 0,
+        anchored_cum_tp_vol / anchored_cum_vol,
+        typical,
+    )
+
+    cur_vwap = float(vwap_series[-1])
+    cur_close = float(close[-1])
+    price_vs_vwap_pct = round((cur_close - cur_vwap) / cur_vwap * 100, 4) if cur_vwap != 0 else None
+
+    # Slope: compare vwap today vs 5 days ago
+    slope = "flat"
+    if len(vwap_series) >= 6:
+        delta = vwap_series[-1] - vwap_series[-6]
+        threshold = cur_vwap * 0.001  # 0.1% threshold
+        if delta > threshold:
+            slope = "up"
+        elif delta < -threshold:
+            slope = "down"
+
+    return {
+        "vwap": round(cur_vwap, 4),
+        "price_vs_vwap_pct": price_vs_vwap_pct,
+        "slope": slope,
+        "vwap_series": vwap_series,  # full array for alpha functions
+    }

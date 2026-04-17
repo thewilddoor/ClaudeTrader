@@ -131,3 +131,58 @@ def test_calc_mfi_range(ohlcv_260):
     cur = result["cur"]
     assert cur is None or 0.0 <= cur <= 100.0
     assert result["divergence"] in ("bull", "bear", "none")
+
+
+# ── Trend tests ───────────────────────────────────────────────────────────
+
+def test_calc_ema_samples_returns_5_points(ohlcv_260):
+    from scheduler.tools._ta import calc_ema_samples
+    result = calc_ema_samples(ohlcv_260["close"], ohlcv_260["dates"], periods=[21, 55, 89])
+    assert "ema_samples" in result
+    assert len(result["ema_samples"]) == 5
+    assert "ema21" in result["ema_samples"][0]
+    assert "ema55" in result["ema_samples"][0]
+    assert "ema89" in result["ema_samples"][0]
+    assert result["alignment"] in ("bull", "bear", "mixed")
+    assert "price_vs_ema21_pct" in result
+
+
+def test_calc_ema_samples_weekly_no_ema89(ohlcv_260):
+    from scheduler.tools._ta import calc_ema_samples, resample_weekly
+    records = [{"date": d, "open": float(o), "high": float(h), "low": float(l),
+                "close": float(c), "volume": float(v)}
+               for d, o, h, l, c, v in zip(
+                   ohlcv_260["dates"], ohlcv_260["open"], ohlcv_260["high"],
+                   ohlcv_260["low"], ohlcv_260["close"], ohlcv_260["volume"])]
+    weekly = resample_weekly(records)
+    w_close = np.array([w["c"] for w in weekly])
+    w_dates = [w["d"] for w in weekly]
+    result = calc_ema_samples(w_close, w_dates, periods=[21, 55])
+    assert "ema89" not in result["ema_samples"][0]
+
+
+def test_calc_adx_trend_strength(ohlcv_260):
+    from scheduler.tools._ta import calc_adx
+    result = calc_adx(ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"], timeframe="1d")
+    assert result["trend_strength"] in ("strong", "trending", "ranging")
+    # ohlcv_260 has 260 candles — ADX warmup is ~28 bars, so adx must be non-None
+    assert result["adx"] is not None, "adx should not be None with 260 candles"
+    assert result["adx"] >= 0
+    assert "di_plus" in result and "di_minus" in result
+
+
+def test_calc_adx_1w_no_di(ohlcv_260):
+    from scheduler.tools._ta import calc_adx
+    result = calc_adx(ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"], timeframe="1w")
+    assert "di_plus" not in result
+    assert "trend_strength" in result
+
+
+def test_calc_vwap_returns_keys(ohlcv_260):
+    from scheduler.tools._ta import calc_vwap
+    result = calc_vwap(ohlcv_260["high"], ohlcv_260["low"],
+                       ohlcv_260["close"], ohlcv_260["volume"], ohlcv_260["dates"])
+    assert "vwap" in result
+    assert result["slope"] in ("up", "down", "flat")
+    assert "price_vs_vwap_pct" in result
+    assert "vwap_series" in result  # internal — used by alpha27/32/41
