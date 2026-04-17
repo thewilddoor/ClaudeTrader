@@ -140,7 +140,7 @@ def trade_open(
     import sqlite3
     from pathlib import Path
 
-    db_path = "/data/trades/trades.db"
+    db_path = DB_PATH
     if not Path(db_path).exists():
         raise RuntimeError("trades.db not found — run bootstrap first")
 
@@ -201,7 +201,7 @@ def trade_close(
     import sqlite3
     from pathlib import Path
 
-    db_path = "/data/trades/trades.db"
+    db_path = DB_PATH
     if not Path(db_path).exists():
         raise RuntimeError("trades.db not found — run bootstrap first")
 
@@ -256,7 +256,7 @@ def hypothesis_log(
     import sqlite3
     from pathlib import Path
 
-    db_path = "/data/trades/trades.db"
+    db_path = DB_PATH
     if not Path(db_path).exists():
         raise RuntimeError("trades.db not found — run bootstrap first")
 
@@ -295,7 +295,7 @@ def trade_query(sql: str) -> list[dict]:
     import sqlite3
     from pathlib import Path
 
-    db_path = "/data/trades/trades.db"
+    db_path = DB_PATH
     if not Path(db_path).exists():
         raise RuntimeError("trades.db not found — run bootstrap first")
 
