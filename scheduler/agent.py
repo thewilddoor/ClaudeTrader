@@ -111,9 +111,8 @@ Examples:
 Do NOT use archival_memory_insert for trades — they will not be queryable.
 Refresh performance_snapshot from trade_query at EOD, never by hand.
 
-## Strategy Evolution (eod_reflection and weekly_review only)
-Propose changes via proposed_change in session JSON. The system backtests
-filterable changes and runs probation (10-20 trades) before promoting.
+## Strategy change protocol
+Never write changes to this document directly. Propose changes via proposed_change in session JSON. The system backtests filterable changes and runs probation (10-20 trades) before promoting.
 Result — confirmed or reverted with performance numbers — appears next session.
 
   "proposed_change": {
@@ -310,10 +309,10 @@ class LettaTraderAgent:
         agent = client.create_agent(
             name=agent_name,
             llm_config={
-                "model": "claude-sonnet-4-6",
-                "model_endpoint_type": "anthropic",
-                "model_endpoint": "https://api.anthropic.com/v1",
-                "context_window": 200000,
+                "model": os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
+                "model_endpoint_type": "openai",
+                "model_endpoint": "https://openrouter.ai/api/v1",
+                "context_window": int(os.environ.get("OPENROUTER_CONTEXT_WINDOW", "200000")),
             },
             memory=memory,
             tool_exec_environment_variables=tool_env,

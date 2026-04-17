@@ -80,3 +80,25 @@ def test_initial_strategy_doc_contains_protocol_instruction():
     assert "proposed_change" in INITIAL_STRATEGY_DOC
     assert "Strategy change protocol" in INITIAL_STRATEGY_DOC
     assert "Never write changes to this document directly" in INITIAL_STRATEGY_DOC
+
+
+def test_create_new_uses_openrouter_config(monkeypatch):
+    monkeypatch.setenv("OPENROUTER_MODEL", "openai/gpt-4o")
+    monkeypatch.setenv("OPENROUTER_CONTEXT_WINDOW", "128000")
+
+    with patch("scheduler.agent.create_client") as mock_create:
+        mock_client = MagicMock()
+        mock_create.return_value = mock_client
+
+        created_agent = MagicMock()
+        created_agent.id = "new-agent-id"
+        mock_client.create_agent.return_value = created_agent
+
+        LettaTraderAgent.create_new("test_trader", server_url="http://localhost:8283")
+
+        call_kwargs = mock_client.create_agent.call_args[1]
+        llm = call_kwargs["llm_config"]
+        assert llm["model_endpoint_type"] == "openai"
+        assert llm["model_endpoint"] == "https://openrouter.ai/api/v1"
+        assert llm["model"] == "openai/gpt-4o"
+        assert llm["context_window"] == 128000
