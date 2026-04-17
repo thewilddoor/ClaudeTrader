@@ -129,7 +129,7 @@ def fmp_ohlcv(ticker: str, limit: int = 5, api_key: Optional[str] = None) -> dic
                 **_ta.calc_rsi(close),
                 **_ta.calc_macd(close),
                 **_ta.calc_stoch(high, low, close),
-                **_ta.calc_mfi(high, low, close, volume),
+                "mfi": _ta.calc_mfi(high, low, close, volume),
             },
             "trend_1d": {
                 **_ta.calc_ema_samples(close, dates, periods=[21, 55, 89]),

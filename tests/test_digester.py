@@ -14,7 +14,7 @@ def test_summarize_calls_haiku_with_correct_model():
     result = digester.summarize("pre_market session response text", "pre_market")
 
     call_kwargs = mock_client.messages.create.call_args[1]
-    assert call_kwargs["model"] == "claude-haiku-4-5-20251001"
+    assert call_kwargs["model"] == "claude-haiku-4-5"
     assert call_kwargs["max_tokens"] == 400
     assert "DECISIONS MADE" in result
 
