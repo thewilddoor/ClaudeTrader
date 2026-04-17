@@ -616,7 +616,7 @@ def calc_52w_range(close: np.ndarray) -> dict:
         "wk52_hi": round(hi, 4),
         "wk52_lo": round(lo, 4),
         "wk52_pct": pct,
-        "dist_from_hi_pct": round((hi - cur) / hi * 100, 4) if hi != 0 else None,
+        "dist_from_hi_pct": round((hi - cur) / cur * 100, 4) if cur != 0 else None,
         "dist_from_lo_pct": round((cur - lo) / lo * 100, 4) if lo != 0 else None,
     }
 
@@ -682,7 +682,8 @@ def detect_fvg(high: np.ndarray, low: np.ndarray, close: np.ndarray,
         # Bullish FVG: high[i-1] < low[i+1]
         gap_lo = float(high[i - 1])
         gap_hi = float(low[i + 1])
-        if gap_hi > gap_lo and (gap_hi - gap_lo) / max(close[i], 1e-10) >= min_gap_pct:
+        _eps = 1e-9
+        if gap_hi > gap_lo and (gap_hi - gap_lo) / max(close[i], 1e-10) >= min_gap_pct - _eps:
             filled = any(low[j] <= gap_lo for j in range(i + 2, n))
             if not filled:
                 fvgs.append({
@@ -696,7 +697,7 @@ def detect_fvg(high: np.ndarray, low: np.ndarray, close: np.ndarray,
         # Bearish FVG: low[i-1] > high[i+1]
         gap_hi = float(low[i - 1])
         gap_lo = float(high[i + 1])
-        if gap_hi > gap_lo and (gap_hi - gap_lo) / max(close[i], 1e-10) >= min_gap_pct:
+        if gap_hi > gap_lo and (gap_hi - gap_lo) / max(close[i], 1e-10) >= min_gap_pct - _eps:
             filled = any(high[j] >= gap_hi for j in range(i + 2, n))
             if not filled:
                 fvgs.append({
