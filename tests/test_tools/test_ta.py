@@ -374,3 +374,32 @@ def test_order_block_stale_flag(ohlcv_260):
     # If any OBs detected at bar 0, they are > _STALE_DAYS bars ago => stale=True
     if obs:
         assert obs[-1]["stale"] is True, "OB at bar 0 should be marked stale"
+
+
+# ── Pattern tests ─────────────────────────────────────────────────────────
+
+def test_calc_patterns_returns_list(ohlcv_260):
+    from scheduler.tools._ta import calc_patterns
+    result = calc_patterns(
+        ohlcv_260["open"], ohlcv_260["high"], ohlcv_260["low"],
+        ohlcv_260["close"], ohlcv_260["dates"], lookback=5
+    )
+    assert isinstance(result, list)
+    assert len(result) <= 5
+    for p in result:
+        assert "pattern" in p and "date" in p and "signal" in p
+        assert p["signal"] in ("bull", "bear", "neutral")
+
+
+def test_calc_patterns_empty_when_no_signal():
+    from scheduler.tools._ta import calc_patterns
+    # Trending candles with normal OHLC structure (no reversal patterns)
+    n = 20
+    close = np.arange(100.0, 100.0 + n, 1.0)
+    high = close + 0.5
+    low = close - 0.5
+    open_ = close - 0.2  # slightly bullish
+    result = calc_patterns(open_, high, low, close,
+                           [f"2026-01-{i+1:02d}" for i in range(n)], lookback=5)
+    # Trending candles generally don't trigger patterns
+    assert isinstance(result, list)

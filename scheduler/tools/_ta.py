@@ -849,3 +849,65 @@ def calc_ics(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
         "market_structure": detect_market_structure(high, low, close, dates),
         "breaker_blocks":   detect_breaker_blocks(open_, high, low, close, dates, atr),
     }
+
+
+# ─── Candlestick Patterns ─────────────────────────────────────────────────────
+
+_PATTERN_FUNCS = [
+    # (talib_func, name, signal)
+    (talib.CDLENGULFING,     "Engulfing",      None),    # ±100 = bull/bear
+    (talib.CDLHAMMER,        "Hammer",         "bull"),
+    (talib.CDLINVERTEDHAMMER,"InvHammer",      "bull"),
+    (talib.CDLSHOOTINGSTAR,  "ShootingStar",   "bear"),
+    (talib.CDLDOJI,          "Doji",           "neutral"),
+    (talib.CDLDRAGONFLYDOJI, "DragonflyDoji",  "bull"),
+    (talib.CDLGRAVESTONEDOJI,"GravestoneDoji", "bear"),
+    (talib.CDLMORNINGSTAR,   "MorningStar",    "bull"),
+    (talib.CDLEVENINGSTAR,   "EveningStar",    "bear"),
+    (talib.CDLMARUBOZU,      "Marubozu",       None),    # ±100 = bull/bear
+    (talib.CDLHARAMI,        "InsideBar",      None),    # ±100 = bull/bear
+    (talib.CDLPIERCING,      "PinBar",         "bull"),
+]
+
+
+def calc_patterns(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
+                  close: np.ndarray, dates: list, lookback: int = 5,
+                  max_patterns: int = 5) -> list:
+    """Detect candlestick patterns in the last `lookback` candles.
+
+    Returns list of {pattern, date, signal} dicts, most recent first, capped at max_patterns.
+    Returns [] if no patterns found — never omits the key in caller.
+    """
+    o = open_.astype("f8")
+    h = high.astype("f8")
+    l = low.astype("f8")
+    c = close.astype("f8")
+    n = len(c)
+
+    found = []
+    for fn, name, fixed_signal in _PATTERN_FUNCS:
+        try:
+            result = fn(o, h, l, c)
+        except Exception:
+            continue
+        # Check last `lookback` bars
+        for i in range(max(0, n - lookback), n):
+            val = int(result[i])
+            if val == 0:
+                continue
+            if fixed_signal is not None:
+                signal = fixed_signal
+            else:
+                signal = "bull" if val > 0 else "bear"
+            found.append({"pattern": name, "date": dates[i], "signal": signal, "_idx": i})
+
+    # Sort by recency (most recent first), deduplicate same bar+pattern
+    seen = set()
+    unique = []
+    for item in sorted(found, key=lambda x: x["_idx"], reverse=True):
+        key = (item["date"], item["pattern"])
+        if key not in seen:
+            seen.add(key)
+            unique.append({"pattern": item["pattern"], "date": item["date"], "signal": item["signal"]})
+
+    return unique[:max_patterns]
