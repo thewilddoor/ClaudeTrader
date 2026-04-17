@@ -305,28 +305,30 @@ Max 5 patterns per timeframe. Return `[]` if none — do not omit key.
 
 All adapted from cross-sectional to single-stock time-series percentile rank (60-day rolling window). All require only OHLCV + VWAP. Returned as flat dict of scalars.
 
-| Key | Alpha | Signal Family | Lookback |
-|-----|-------|---------------|----------|
-| `a1` | #1 Signed Vol-Adj Return | Price Momentum | 25d |
-| `a2` | #2 Return-Volume Correlation | Volume-Price | 68d |
-| `a3` | #3 Open-Volume Correlation (ranked) | Volume-Price | 70d |
-| `a4` | #4 Low Time-Series Rank | Mean Reversion | 9d |
-| `a6` | #6 Raw Open-Volume Correlation | Volume-Price | 10d |
-| `a7` | #7 ADV-Gated Momentum | Volume-Price | 67d |
-| `a9` | #9 Conditional Delta (5d) | Mean Reversion | 6d |
-| `a10` | #10 Conditional Delta (4d) | Mean Reversion | 5d |
-| `a12` | #12 Volume-Signed Price Change | Microstructure | 2d |
-| `a20` | #20 Open vs Prior Extremes | Volatility | 2d |
-| `a27` | #27 Vol-VWAP Correlation Rank | Volume-Price | 68d |
-| `a31` | #31 Multi-Timeframe Mean Reversion | Mean Reversion | 32d |
-| `a32` | #32 Long-Range VWAP Persistence | Volatility | 235d |
-| `a34` | #34 Short/Long Vol Ratio Squeeze | Volatility | 65d |
-| `a39` | #39 Decay-Weighted Volume Delta | Microstructure | 29d |
-| `a41` | #41 Geometric Mid vs VWAP | Volume-Price | 1d |
-| `a49` | #49 Velocity Acceleration | Price Momentum | 21d |
-| `a50` | #50 High-Volume Distribution | Microstructure | 20d |
-| `a55` | #55 Close-in-Range vs Volume | Mean Reversion | 78d |
-| `a101` | #101 Bar Quality Ratio | Microstructure | 1d |
+Keys use descriptive names so the agent can interpret each signal without needing a legend or schema lookup.
+
+| Output Key | Alpha | Signal Family | Lookback |
+|------------|-------|---------------|----------|
+| `a1_momentum_peak` | #1 Signed Vol-Adj Return | Price Momentum | 25d |
+| `a2_vol_accel_corr` | #2 Return-Volume Correlation | Volume-Price | 68d |
+| `a3_open_vol_ranked` | #3 Open-Volume Correlation (ranked) | Volume-Price | 70d |
+| `a4_support_floor` | #4 Low Time-Series Rank | Mean Reversion | 9d |
+| `a6_open_vol_raw` | #6 Raw Open-Volume Correlation | Volume-Price | 10d |
+| `a7_vol_gated` | #7 ADV-Gated Momentum | Volume-Price | 67d |
+| `a9_regime_5d` | #9 Conditional Delta (5d) | Mean Reversion | 6d |
+| `a10_regime_4d` | #10 Conditional Delta (4d) | Mean Reversion | 5d |
+| `a12_capitulation` | #12 Volume-Signed Price Change | Microstructure | 2d |
+| `a20_gap_structure` | #20 Open vs Prior Extremes | Volatility | 2d |
+| `a27_vwap_participation` | #27 Vol-VWAP Correlation Rank | Volume-Price | 68d |
+| `a31_mean_rev` | #31 Multi-Timeframe Mean Reversion | Mean Reversion | 32d |
+| `a32_vwap_persist` | #32 Long-Range VWAP Persistence | Volatility | 235d |
+| `a34_vol_squeeze` | #34 Short/Long Vol Ratio Squeeze | Volatility | 65d |
+| `a39_low_vol_drop` | #39 Decay-Weighted Volume Delta | Microstructure | 29d |
+| `a41_geo_mid_vwap` | #41 Geometric Mid vs VWAP | Volume-Price | 1d |
+| `a49_accel` | #49 Velocity Acceleration | Price Momentum | 21d |
+| `a50_distribution` | #50 High-Volume Distribution | Microstructure | 20d |
+| `a55_range_vol_corr` | #55 Close-in-Range vs Volume | Mean Reversion | 78d |
+| `a101_bar_quality` | #101 Bar Quality Ratio | Microstructure | 1d |
 
 **Top 5 priority additions** (most orthogonal to existing suite):
 1. `a101` — Bar quality ratio: only indicator capturing candlestick body conviction
