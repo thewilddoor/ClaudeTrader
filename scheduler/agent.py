@@ -1,320 +1,587 @@
-"""Letta agent wrapper for the ClaudeTrading scheduler.
-
-Provides LettaTraderAgent as the primary interface for sending session
-prompts and reading core memory blocks from a running Letta server.
-
-The module-level `create_client` function is a thin factory that returns
-a compatibility shim over `letta_client.Letta`, making it easy to mock
-in tests via `patch("scheduler.agent.create_client")`.
-"""
-
+# scheduler/agent.py
+"""Direct Anthropic SDK agent core. Replaces LettaTraderAgent."""
+import json
+import logging
 import os
+import threading
+from datetime import date
 from typing import Optional
 
-from letta_client import Letta
-from letta.schemas.memory import BasicBlockMemory
-from letta.schemas.block import Block
+from scheduler.memory import MemoryStore
+from scheduler.digester import SessionDigester
 
+log = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Constants: initial memory block content
-# ---------------------------------------------------------------------------
+STATIC_PROMPT = """\
+# ClaudeTrading Operations Manual
 
-INITIAL_STRATEGY_DOC = """# Trading Agent v1
+## Who You Are
 
-## Role
-You are an autonomous portfolio manager. You decide what to trade, when to
-enter, how much to risk, when to exit, and how to evolve your approach.
-No human approves individual trades — you are fully accountable for outcomes.
-Think like a fund manager: every position needs a thesis, every loss needs
-a post-mortem, every edge needs a hypothesis tracking it.
+You are the intelligence engine for an autonomous AI trading system managing a $50,000 Alpaca paper trading account. You are not an assistant — you are an active fund manager. Every session you analyze market conditions, make execution decisions, record your reasoning, and evolve your strategy through structured self-reflection.
 
-## Objective
-Grow a $50k paper account through consistent, positive-expectancy trading.
-Not every trade will win — that is expected. What matters is that your
-edge is real, measurable, and improving. Form hypotheses, test them with
-real trades, and let the data tell you what works. Overtrading is as
-dangerous as undertrading — only take positions where you have a thesis.
+You have full accountability for outcomes. No human approves individual trades. Your edge must be measurable, reproducible, and improving.
 
-## Hard Limits
-- Universe: US equities only. No options, futures, or crypto.
-- Long (buy) or short (sell) — both available.
-- Never write strategy_doc directly. Use proposed_change in session JSON.
-- trade_query: read-only. No INSERT, UPDATE, DELETE.
-- run_script: sandboxed — no credentials injected, 512MB RAM, 60s timeout.
-- Sessions fire on a fixed schedule. You cannot self-trigger.
+## Account Parameters
 
-## What Is Possible
-Everything not in Hard Limits is valid. You can combine any signals, sources,
-and approaches in any way — there is no prescribed method:
-- TA alone, fundamentals alone, news alone, or any mix of all three
-- Buy a breakout because the chart is right; or because earnings beat + momentum agree;
-  or because a catalyst triggered volume + relative strength + sector rotation at once
-- Go long on strength, short on weakness, or hold cash when there is no edge
-- Any setup type: momentum, mean reversion, event-driven, earnings, sector
-  rotation, macro regime, relative strength — invent new ones if data supports them
-- Every value in Risk Defaults can be changed via the strategy gate when
-  your trade data justifies it
-The only constraint is having a thesis backed by evidence.
+Starting equity: $50,000 paper account via Alpaca Markets
+Universe: US equities only — no options, futures, crypto, or foreign securities
+Directions: Long (buy) and short (sell) both available
+Sessions: Fixed cron schedule — you cannot self-trigger
 
-## Risk Defaults (evolve via strategy gate when evidence supports it)
-- Risk per trade: 1% of account
-- Max open positions: 5
-- Max position size: 15% of account
-- Max daily loss: 3% — halt new trades if hit
-- Default stop: 1.5x ATR below entry; target: 3x ATR (min 2:1 R:R)
+Hard position limits (defaults — evolvable via strategy gate):
+- Max open positions: 5 simultaneously
+- Max single position size: 15% of equity
+- Risk per trade: 1% of equity
+- Stop loss default: 1.5x ATR below entry (long) / above entry (short)
+- Profit target default: 3x ATR from entry (minimum 2:1 R:R required)
+- Max daily loss: 3% of equity — halt new positions if breached, no exceptions
+
+Position sizing:
+  shares = (equity * risk_per_trade_pct) / abs(entry_price - stop_loss)
+  position_value = shares * entry_price
+  Reject if position_value > equity * max_position_pct
+
+## Memory System
+
+You maintain five persistent memory blocks injected at session start under "Your Current State."
+
+strategy_doc: Your trading rulebook. NEVER write to it directly. Changes via proposed_change only.
+watchlist: Current candidates. Max 12 entries. Format: TICKER | thesis | date | confidence | entry zone | stop | target
+performance_snapshot: JSON with win_rate_10, win_rate_20, avg_rr, equity, drawdown, pivot_alerts. Refresh from trade_query at EOD only.
+today_context: Pre-market analysis. Written in pre_market. Read in market_open. Reset each day.
+observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in <=15 words.
 
 ## Session Responsibilities
-- pre_market: screen stocks, assess regime, build watchlist with planned entry/stop/target levels
-- market_open: execute planned trades; call trade_open on every fill
-- health_check: review open positions; close if thesis invalidated; seek new setups
-- eod_reflection: review trades, refresh performance_snapshot, propose changes if patterns emerge
-- weekly_review: deep pattern mining, prune watchlist, compress memory, major strategy review
 
-## Tools
-Data (any combination valid — no single source required):
-  fmp_screener           filter stocks by market cap, volume, sector
-  fmp_ohlcv              90 days daily OHLCV (1D resolution)
-  fmp_news               recent news by ticker
-  fmp_earnings_calendar  upcoming earnings dates + estimates
-  serper_search          web and news search
+### pre_market (6:00 AM ET)
+1. alpaca_get_account — verify equity
+2. fmp_ohlcv("SPY", limit=60) + fmp_ohlcv("VIX", limit=60) then run_script with market_regime_detector
+3. fmp_screener to find candidates (volume > 1M, mkt_cap > 2B)
+4. For each candidate: fmp_ohlcv(limit=20), run_script indicators, fmp_news, fmp_earnings_calendar
+5. Write today_context with regime + top 5-10 setups
+6. Write watchlist (max 12)
+7. hypothesis_log new theses as "formed"
 
-run_script: full Python runtime (pandas, numpy). Write any analysis code;
-  embed data as variables, read results from stdout. No credentials injected.
-  Pre-built library (scripts/indicators/index.json):
-  Momentum:   rsi, macd, rate_of_change
-  Trend:      ema_crossover, adx_trend_strength, supertrend
-  Volatility: atr, bollinger_bands, vix_percentile
-  Volume:     vwap, obv, volume_profile
-  Composite:  market_regime_detector, relative_strength_scanner
+### market_open (9:30 AM ET)
+1. Review today_context and watchlist
+2. Check recent_context for live positions — skip already-held tickers
+3. For each trade where conditions are met:
+   a. Compute shares via sizing formula
+   b. trade_open(...) FIRST — get trade_id
+   c. alpaca_place_order(...)
+   d. hypothesis_log(id, "testing", f"Opened trade_id {trade_id} at {entry}")
+4. Skip trades where price is outside entry zone — do not chase
 
-Execution:
-  alpaca_get_account    equity, buying power, cash
-  alpaca_get_positions  all open positions
-  alpaca_place_order    market/limit/stop/stop_limit; buy or sell
-  alpaca_list_orders    order history by status
-  alpaca_cancel_order   cancel open order
+CRITICAL: trade_open MUST be called BEFORE alpaca_place_order. If the order fails after trade_open succeeds, call trade_close(trade_id, 0, "order_failed", 0, 0) immediately to prevent an orphaned open record. If trade_open fails, do not place the order.
+No proposed_change in market_open — system rejects it.
 
-## Record Keeping (required)
-  trade_open(ticker, side, entry_price, size, setup_type, hypothesis_id,
-             rationale, vix_at_entry, regime) → returns trade_id, store it
-  trade_close(trade_id, exit_price, exit_reason, outcome_pnl, r_multiple)
-    r_multiple = outcome_pnl / initial_risk — calculate before calling
-  hypothesis_log(hypothesis_id, event_type, body)
-    event_type: formed / testing / confirmed / rejected / refined
-  trade_query(sql) — SELECT only
+### health_check (1:00 PM ET)
+1. Review positions from recent_context
+2. For each position: is the thesis still intact?
+3. Close if: stop hit, thesis invalidated by news/structure, or cannot state why trade is still valid
+   Close sequence: alpaca_place_order -> trade_close -> hypothesis_log update
+4. Seek new setups only if buying_power > 0 AND positions < 5 AND clear setup
+No proposed_change in health_check — system rejects it.
 
-Examples:
-  trade_query("SELECT AVG(r_multiple) FROM trades WHERE setup_type='momentum' AND closed_at IS NOT NULL")
-  trade_query("SELECT COUNT(*) as n, AVG(r_multiple) as avg_r FROM trades WHERE hypothesis_id='H001'")
+### eod_reflection (3:45 PM ET)
+1. Close remaining open positions (unless overnight hold explicitly justified in today_context)
+2. trade_query to compute win_rate_10, win_rate_20, avg_rr — update performance_snapshot
+3. Write new observations (<=15 words, date-tagged)
+4. If pattern across >=3 trades: emit proposed_change
+5. Reset today_context to "Cleared."
 
-Do NOT use archival_memory_insert for trades — they will not be queryable.
-Refresh performance_snapshot from trade_query at EOD, never by hand.
+### weekly_review (6:00 PM Sunday)
+1. Comprehensive trade_query: win rates by setup_type, regime, VIX range, hypothesis
+2. Confirm (>=10 trades, positive avg_r) or reject (negative avg_r) hypotheses
+3. Compress observations to <=10 bullets
+4. Compress watchlist — remove expired theses
+5. Update performance_snapshot
+6. proposed_change if major pattern found
 
-## Strategy change protocol
-Never write changes to this document directly. Propose changes via proposed_change in session JSON. The system backtests filterable changes and runs probation (10-20 trades) before promoting.
-Result — confirmed or reverted with performance numbers — appears next session.
+## Tool Reference
 
+### Market Data
+fmp_screener(market_cap_more_than, volume_more_than, exchange, limit)
+fmp_ohlcv(ticker, limit=20) — use limit=60 for market_regime_detector (needs MA50)
+fmp_news(tickers, limit=10)
+fmp_earnings_calendar(from_date, to_date)
+serper_search(query)
+
+### Code Execution
+run_script(code, timeout=30, scripts_dir="/app/scripts")
+- NO API credentials inside scripts — pre-fetch data with fmp_ohlcv first
+- Embed fetched data as Python variables in the script string
+- End scripts with: print(json.dumps(result))
+
+Indicator scripts (/app/scripts/indicators/):
+  rsi.py -> compute_rsi(closes, period=14) -> {rsi, oversold, overbought}
+  macd.py -> compute_macd(closes) -> {macd, signal, histogram, crossover}
+  rate_of_change.py -> compute_roc(closes, period=10) -> {roc}
+  ema_crossover.py -> compute_ema_crossover(closes, fast=9, slow=21) -> {ema_fast, ema_slow, cross}
+  adx_trend_strength.py -> compute_adx(highs, lows, closes, period=14) -> {adx, trend_strength}
+  supertrend.py -> compute_supertrend(highs, lows, closes) -> {direction, level}
+  atr.py -> compute_atr(highs, lows, closes, period=14) -> {atr, atr_pct}
+  bollinger_bands.py -> compute_bb(closes) -> {upper, middle, lower, width, pct_b}
+  vix_percentile.py -> compute_vix_percentile(vix_closes) -> {percentile, regime}
+  vwap.py -> compute_vwap(highs, lows, closes, volumes) -> {vwap, distance_pct}
+  obv.py -> compute_obv(closes, volumes) -> {obv, trend}
+  volume_profile.py -> compute_volume_profile(closes, volumes) -> {poc, value_area_high, value_area_low}
+  market_regime_detector.py -> detect_regime(spy_ohlcv, vix_ohlcv) -> {regime, vix_percentile, breadth, trend_slope}
+  relative_strength_scanner.py -> scan_rs(ticker_ohlcv_dict, benchmark_ohlcv) -> {rankings}
+
+### Execution
+alpaca_get_account()
+alpaca_get_positions()
+alpaca_place_order(symbol, qty, side, order_type="market", time_in_force="day", limit_price=None, stop_price=None)
+alpaca_list_orders(status="open", limit=50)
+alpaca_cancel_order(order_id)
+
+### Record Keeping (Required)
+trade_open(ticker, side, entry_price, size, setup_type, hypothesis_id, rationale,
+           vix_at_entry, regime, stop_loss=None, take_profit=None, context_json=None)
+  context_json must be a JSON string with indicator values at entry:
+  {"rsi": 63.2, "adx": 28.1, "atr": 3.45, "atr_pct": 0.034, "volume_ratio": 1.8,
+   "vix_percentile": 42.0, "macd_histogram": 0.23, "distance_from_vwap_pct": 0.012,
+   "supertrend_direction": "up"}
+  Include any indicator you actually computed. These values are queryable via filter_sql.
+
+trade_close(trade_id, exit_price, exit_reason, outcome_pnl, r_multiple)
+  r_multiple = outcome_pnl / (abs(entry_price - stop_loss) * size)
+  exit_reason: hit_target | stop_hit | thesis_invalidated | time_exit | manual | order_failed
+
+hypothesis_log(hypothesis_id, event_type, body)
+  event_type: formed | testing | confirmed | rejected | refined
+  IDs: H001, H002, H003... never reuse
+
+trade_query(sql) — SELECT only. Blocked: INSERT UPDATE DELETE DROP ALTER CREATE PRAGMA
+
+Useful queries:
+  SELECT setup_type, COUNT(*) n, AVG(r_multiple) avg_r,
+         SUM(CASE WHEN r_multiple > 0 THEN 1 ELSE 0 END)*1.0/COUNT(*) win_rate
+  FROM trades WHERE closed_at IS NOT NULL GROUP BY setup_type ORDER BY avg_r DESC;
+
+  SELECT ticker, side, setup_type, r_multiple, exit_reason, closed_at
+  FROM trades WHERE closed_at IS NOT NULL ORDER BY closed_at DESC LIMIT 10;
+
+## Strategy Evolution Gate
+
+Valid only in: eod_reflection, weekly_review.
+Invalid in: pre_market, market_open, health_check — system ignores proposed_change there.
+One change at a time — check recent_context for current probationary status first.
+
+proposed_change format:
   "proposed_change": {
-    "description": "human-readable summary",
-    "new_strategy_doc": "full updated doc (no version metadata block)",
-    "filter_sql": "optional — quantitative entry filters only"
+    "description": "What is changing and why, referencing trade data",
+    "new_strategy_doc": "Full strategy_doc replacement text — complete document",
+    "filter_sql": "WHERE clause FRAGMENT only — no WHERE keyword, no SELECT, no LIMIT"
   }
 
-filter_sql examples:
-  json_extract(context_json, '$.rsi') < 65 AND setup_type = 'momentum'
-  regime != 'bear_high_vol'
-  vix_at_entry < 25
-Only include filter_sql for quantitative entry filters expressible as SQL.
+filter_sql rules:
+  Valid:   setup_type = 'momentum' AND json_extract(context_json, '$.rsi') < 65
+  Valid:   vix_at_entry < 25 AND regime != 'bear_high_vol'
+  Invalid: WHERE setup_type = 'momentum'     <- contains WHERE
+  Invalid: SELECT * FROM trades WHERE ...    <- full SQL statement
+  Omit filter_sql for qualitative changes.
+
+## Risk Management
+
+Daily halt: If today's closed trade P&L sum < -3% equity, stop opening new positions.
+Every trade must have a defined stop before entry — no exceptions.
+Health check: If you cannot state in one sentence why a position is still valid, close it.
+Overnight: Default close before 3:50 PM ET. To hold overnight, write explicit justification in today_context.
+Correlation: Max 2 positions in same sector simultaneously.
+
+## JSON Response Format
+
+Every session response must contain a valid JSON object:
+{
+  "session": "session_name",
+  "date": "YYYY-MM-DD",
+  "summary": "One paragraph summary of decisions and reasoning",
+  "actions_taken": ["list of actions"],
+  "proposed_change": null,
+  "errors": []
+}
+
+For market_open, include:
+  "trades_opened": [{"ticker": "X", "trade_id": N, "side": "buy", "size": N, "entry": N, "stop": N, "target": N}]
+  "trades_skipped": [{"ticker": "X", "reason": "..."}]
+
+For eod_reflection, include:
+  "performance_update": {"win_rate_10": N, "avg_rr": N, "current_equity": N}
+
+Errors go in errors[] — scheduler forwards non-empty errors to Telegram.
+
+## Hard Constraints
+
+- trade_query is read-only: INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/PRAGMA blocked
+- run_script has no API credentials: do not call FMP/Alpaca/Serper inside scripts
+- run_script: 30s timeout, 256MB RAM
+- API calls: 30s timeout
+- Strategy gate backtest: 60 days maximum
+- One proposed_change in probation at a time
+- proposed_change processed only in eod_reflection and weekly_review
+- This system is stateless between sessions — no conversation history carries over
+- You cannot self-trigger sessions or schedule future actions
 
 ## System Constraints
-Hard limits (not overridable): API 30s timeout; run_script 60s/512MB; backtest 60 days; one probation max.
+
+Fixed limits (non-overridable via strategy gate):
+- API calls: 30s timeout per request
+- run_script: 60s/512MB per execution
+- Strategy gate backtest window: 60 days
+- Maximum probationary changes active: 1
 """
 
-INITIAL_PERFORMANCE_SNAPSHOT = """{
-  "trades_total": 0,
-  "win_rate_10": null,
-  "win_rate_20": null,
-  "avg_rr": null,
-  "current_drawdown_pct": 0.0,
-  "peak_equity": 50000.0,
-  "current_equity": 50000.0,
-  "pivot_alerts": []
-}"""
+TOOL_SCHEMAS = [
+    {
+        "name": "trade_open",
+        "description": "Record a new trade at entry time. Call BEFORE placing the Alpaca order. Returns trade_id.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "side": {"type": "string", "enum": ["buy", "sell"]},
+                "entry_price": {"type": "number"},
+                "size": {"type": "number"},
+                "setup_type": {"type": "string"},
+                "hypothesis_id": {"type": "string"},
+                "rationale": {"type": "string"},
+                "vix_at_entry": {"type": "number"},
+                "regime": {"type": "string"},
+                "stop_loss": {"type": "number"},
+                "take_profit": {"type": "number"},
+                "context_json": {"type": "string"},
+            },
+            "required": ["ticker", "side", "entry_price", "size", "setup_type",
+                         "hypothesis_id", "rationale", "vix_at_entry", "regime"],
+        },
+    },
+    {
+        "name": "trade_close",
+        "description": "Stamp exit fields onto an open trade after the exit order fills.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "trade_id": {"type": "integer"},
+                "exit_price": {"type": "number"},
+                "exit_reason": {"type": "string", "enum": ["hit_target", "stop_hit", "thesis_invalidated", "time_exit", "manual", "order_failed"]},
+                "outcome_pnl": {"type": "number"},
+                "r_multiple": {"type": "number"},
+            },
+            "required": ["trade_id", "exit_price", "exit_reason", "outcome_pnl", "r_multiple"],
+        },
+    },
+    {
+        "name": "hypothesis_log",
+        "description": "Append a lifecycle event to the hypothesis ledger.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "hypothesis_id": {"type": "string"},
+                "event_type": {"type": "string", "enum": ["formed", "testing", "confirmed", "rejected", "refined"]},
+                "body": {"type": "string"},
+            },
+            "required": ["hypothesis_id", "event_type", "body"],
+        },
+    },
+    {
+        "name": "trade_query",
+        "description": "Execute a read-only SELECT query against the trades and hypothesis_log tables.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "sql": {"type": "string"},
+            },
+            "required": ["sql"],
+        },
+    },
+    {
+        "name": "alpaca_get_account",
+        "description": "Get Alpaca account information: equity, buying_power, cash.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "alpaca_get_positions",
+        "description": "Get all open positions with symbol, qty, avg_entry_price, unrealized_pl.",
+        "input_schema": {"type": "object", "properties": {}, "required": []},
+    },
+    {
+        "name": "alpaca_place_order",
+        "description": "Place a buy or sell order. Call trade_open FIRST to get trade_id.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "qty": {"type": "number"},
+                "side": {"type": "string", "enum": ["buy", "sell"]},
+                "order_type": {"type": "string", "enum": ["market", "limit", "stop", "stop_limit"]},
+                "time_in_force": {"type": "string", "enum": ["day", "gtc", "opg", "cls", "ioc", "fok"]},
+                "limit_price": {"type": "number"},
+                "stop_price": {"type": "number"},
+            },
+            "required": ["symbol", "qty", "side"],
+        },
+    },
+    {
+        "name": "alpaca_list_orders",
+        "description": "List orders by status. Use to confirm limit order fills.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "status": {"type": "string", "enum": ["open", "closed", "all"]},
+                "limit": {"type": "integer"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "alpaca_cancel_order",
+        "description": "Cancel an open order by its UUID.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "order_id": {"type": "string"},
+            },
+            "required": ["order_id"],
+        },
+    },
+    {
+        "name": "fmp_screener",
+        "description": "Screen US stocks by market cap and volume.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "market_cap_more_than": {"type": "integer"},
+                "volume_more_than": {"type": "integer"},
+                "exchange": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": [],
+        },
+    },
+    {
+        "name": "fmp_ohlcv",
+        "description": "Get daily OHLCV for a ticker. Default 20 days. Use limit=60 for market_regime_detector.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
+                "limit": {"type": "integer"},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "fmp_news",
+        "description": "Get recent news articles for a list of tickers.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "tickers": {"type": "array", "items": {"type": "string"}},
+                "limit": {"type": "integer"},
+            },
+            "required": ["tickers"],
+        },
+    },
+    {
+        "name": "fmp_earnings_calendar",
+        "description": "Get scheduled earnings between two dates.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "from_date": {"type": "string"},
+                "to_date": {"type": "string"},
+            },
+            "required": ["from_date", "to_date"],
+        },
+    },
+    {
+        "name": "serper_search",
+        "description": "Google search for news, macro context, SEC filings, analyst ratings.",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "query": {"type": "string"},
+            },
+            "required": ["query"],
+        },
+    },
+    {
+        "name": "run_script",
+        "description": "Execute Python in a sandboxed subprocess. Pre-fetch all data before calling. No API credentials inside scripts. End with print(json.dumps(result)).",
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "code": {"type": "string"},
+                "timeout": {"type": "integer"},
+                "scripts_dir": {"type": "string"},
+            },
+            "required": ["code"],
+        },
+    },
+]
 
-INITIAL_WATCHLIST = """# Watchlist
-Empty on bootstrap — populated during pre_market sessions.
-Format per entry: TICKER | thesis | date_added | confidence (1-10)
-"""
 
-INITIAL_TODAY_CONTEXT = """# Today's Context
-Not yet populated — will be written during pre_market session.
-"""
-
-
-# ---------------------------------------------------------------------------
-# Compatibility shim
-# ---------------------------------------------------------------------------
-
-class _LettaClientShim:
-    """Wraps letta_client.Letta with the interface expected by LettaTraderAgent.
-
-    Translates the new REST-style API (client.agents.messages.create,
-    client.agents.blocks.list) into the familiar send_message /
-    get_in_context_memory surface so that existing call sites and tests
-    remain unchanged.
-    """
-
-    def __init__(self, letta_client: Letta) -> None:
-        self._client = letta_client
-
-    def send_message(self, agent_id: str, message: str, role: str = "user"):
-        """Send a message to the agent and return the response."""
-        response = self._client.agents.messages.create(
-            agent_id=agent_id,
-            messages=[{"role": role, "content": message}],
-        )
-        return response
-
-    def get_in_context_memory(self, agent_id: str):
-        """Return an object with a .blocks attribute listing core memory blocks."""
-        blocks = self._client.agents.blocks.list(agent_id=agent_id)
-
-        class _MemoryView:
-            pass
-
-        view = _MemoryView()
-        view.blocks = list(blocks)
-        return view
-
-    def create_agent(self, name: str, llm_config, memory, **kwargs):
-        """Thin pass-through used only by bootstrap (create_new classmethod)."""
-        return self._client.agents.create(
-            name=name,
-            llm_config=llm_config,
-            memory_blocks=[
-                {"label": b.label, "value": b.value, "limit": b.limit}
-                for b in memory.blocks
-            ],
-            **kwargs,
-        )
-
-    def update_memory_block(self, agent_id: str, block_name: str, value: str) -> None:
-        """Update a named core memory block value via the Letta API."""
-        blocks = self._client.agents.blocks.list(agent_id=agent_id)
-        for block in blocks:
-            if block.label == block_name:
-                self._client.blocks.update(block_id=block.id, value=value)
-                return
-        raise ValueError(f"Memory block '{block_name}' not found on agent {agent_id}")
+def _build_tool_functions() -> dict:
+    from scheduler.tools.sqlite import trade_open, trade_close, hypothesis_log, trade_query
+    from scheduler.tools.alpaca import (
+        alpaca_get_account, alpaca_get_positions, alpaca_place_order,
+        alpaca_list_orders, alpaca_cancel_order,
+    )
+    from scheduler.tools.fmp import fmp_screener, fmp_ohlcv, fmp_news, fmp_earnings_calendar
+    from scheduler.tools.serper import serper_search
+    from scheduler.tools.pyexec import run_script
+    return {
+        "trade_open": trade_open,
+        "trade_close": trade_close,
+        "hypothesis_log": hypothesis_log,
+        "trade_query": trade_query,
+        "alpaca_get_account": alpaca_get_account,
+        "alpaca_get_positions": alpaca_get_positions,
+        "alpaca_place_order": alpaca_place_order,
+        "alpaca_list_orders": alpaca_list_orders,
+        "alpaca_cancel_order": alpaca_cancel_order,
+        "fmp_screener": fmp_screener,
+        "fmp_ohlcv": fmp_ohlcv,
+        "fmp_news": fmp_news,
+        "fmp_earnings_calendar": fmp_earnings_calendar,
+        "serper_search": serper_search,
+        "run_script": run_script,
+    }
 
 
-def create_client(base_url: Optional[str] = None) -> _LettaClientShim:
-    """Factory that returns a shim client pointing at the given Letta server URL.
+def _execute_tool(name: str, input_dict: dict):
+    fns = _build_tool_functions()
+    fn = fns.get(name)
+    if fn is None:
+        return {"error": f"Unknown tool: {name}"}
+    try:
+        return fn(**input_dict)
+    except Exception as exc:
+        log.error("Tool %s failed: %s", name, exc)
+        return {"error": str(exc)}
 
-    Defined at module level so that tests can mock it with:
-        patch("scheduler.agent.create_client")
-    """
-    url = base_url or os.environ.get("LETTA_SERVER_URL", "http://localhost:8283")
-    return _LettaClientShim(Letta(base_url=url))
+
+def build_system_prompt(blocks: dict) -> list:
+    """Two-tier system prompt: static (cached) + dynamic memory blocks (uncached)."""
+    dynamic_text = (
+        "## Your Current State\n"
+        "[Values read from MemoryStore at session start — written back by you each session]\n\n"
+        f"### STRATEGY_DOC\n{blocks.get('strategy_doc', 'Not set.')}\n\n"
+        f"### WATCHLIST\n{blocks.get('watchlist', 'Not set.')}\n\n"
+        f"### PERFORMANCE_SNAPSHOT\n{blocks.get('performance_snapshot', 'Not set.')}\n\n"
+        f"### TODAY_CONTEXT\n{blocks.get('today_context', 'Not set.')}\n\n"
+        f"### OBSERVATIONS\n{blocks.get('observations', 'Not set.')}"
+    )
+    return [
+        {
+            "type": "text",
+            "text": STATIC_PROMPT,
+            "cache_control": {"type": "ephemeral"},
+        },
+        {
+            "type": "text",
+            "text": dynamic_text,
+        },
+    ]
 
 
-# ---------------------------------------------------------------------------
-# Main wrapper class
-# ---------------------------------------------------------------------------
+def _extract_text(response) -> str:
+    return "\n".join(
+        block.text for block in response.content if hasattr(block, "text")
+    )
 
-class LettaTraderAgent:
-    """High-level wrapper around a persistent Letta agent.
 
-    All I/O goes through an injected (or auto-created) shim client so that
-    the class is straightforward to unit-test with mocks.
+MAX_TOOL_ITERATIONS = 25
+
+
+class AgentCore:
+    """Stateless session runner. Replaces LettaTraderAgent.
+
+    Interface compatible with strategy_gate.py:
+      run_session(session_name, prompt) — was send_session(prompt)
+      get_memory_block(block_name) — identical
+      update_memory_block(block_name, value) — identical
     """
 
     def __init__(
         self,
-        agent_id: str,
-        server_url: Optional[str] = None,
-        _client=None,  # injectable for testing
-    ) -> None:
-        self.agent_id = agent_id
-        self.client = _client if _client is not None else create_client(
-            base_url=server_url or os.environ.get("LETTA_SERVER_URL", "http://localhost:8283")
-        )
+        db_path: str = "/data/trades/trades.db",
+        model: Optional[str] = None,
+        api_key: Optional[str] = None,
+        _client=None,
+        _digester=None,
+        _memory: Optional[MemoryStore] = None,
+    ):
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+        self.memory = _memory or MemoryStore(db_path=db_path)
 
-    def send_session(self, prompt: str) -> str:
-        """Send a session prompt to the agent and return the last assistant message text.
+        if _client is not None:
+            self.client = _client
+        else:
+            import anthropic
+            self.client = anthropic.Anthropic(
+                api_key=api_key or os.environ["ANTHROPIC_API_KEY"]
+            )
 
-        letta_client AssistantMessage uses .content (str or list of content parts),
-        not .text. Content parts (LettaAssistantMessageContentUnion) each have .text.
-        """
-        response = self.client.send_message(
-            agent_id=self.agent_id,
-            message=prompt,
-            role="user",
-        )
-        texts = []
-        for m in response.messages:
-            if getattr(m, "message_type", None) != "assistant_message":
-                continue
-            content = getattr(m, "content", None)
-            if isinstance(content, str) and content:
-                texts.append(content)
-            elif isinstance(content, list):
-                for part in content:
-                    text = getattr(part, "text", None)
-                    if text:
-                        texts.append(text)
-        return texts[-1] if texts else ""
+        if _digester is not None:
+            self.digester = _digester
+        else:
+            self.digester = SessionDigester(
+                api_key=api_key or os.environ["ANTHROPIC_API_KEY"]
+            )
+
+    def run_session(self, session_name: str, user_message: str) -> str:
+        blocks = self.memory.read_all()
+        system = build_system_prompt(blocks)
+        messages = [{"role": "user", "content": user_message}]
+
+        for _ in range(MAX_TOOL_ITERATIONS):
+            response = self.client.messages.create(
+                model=self.model,
+                max_tokens=4096,
+                system=system,
+                tools=TOOL_SCHEMAS,
+                messages=messages,
+            )
+
+            if response.stop_reason == "end_turn":
+                text = _extract_text(response)
+                log_id = self.memory.log_session(
+                    session_name, date.today().isoformat(), text
+                )
+                threading.Thread(
+                    target=self._run_digest,
+                    args=(log_id, session_name, text),
+                    daemon=True,
+                ).start()
+                return text
+
+            if response.stop_reason == "tool_use":
+                tool_results = []
+                for block in response.content:
+                    if block.type == "tool_use":
+                        result = _execute_tool(block.name, block.input)
+                        tool_results.append({
+                            "type": "tool_result",
+                            "tool_use_id": block.id,
+                            "content": json.dumps(result, default=str),
+                        })
+                messages.append({"role": "assistant", "content": response.content})
+                messages.append({"role": "user", "content": tool_results})
+            else:
+                raise RuntimeError(f"Unexpected stop_reason: {response.stop_reason}")
+
+        raise RuntimeError(f"Exceeded {MAX_TOOL_ITERATIONS} tool iterations in {session_name}")
+
+    def _run_digest(self, log_id: int, session_name: str, raw_response: str) -> None:
+        digest = self.digester.summarize(raw_response, session_name)
+        if digest:
+            self.memory.update_session_digest(log_id, digest)
 
     def get_memory_block(self, block_name: str) -> Optional[str]:
-        """Read a named core memory block and return its value string."""
-        memory = self.client.get_in_context_memory(agent_id=self.agent_id)
-        for block in memory.blocks:
-            if block.label == block_name:
-                return block.value
-        return None
+        return self.memory.read(block_name)
 
     def update_memory_block(self, block_name: str, value: str) -> None:
-        """Write a new value to a named core memory block via the Letta API."""
-        self.client.update_memory_block(self.agent_id, block_name, value)
-
-    @classmethod
-    def create_new(
-        cls,
-        agent_name: str,
-        server_url: Optional[str] = None,
-    ) -> "LettaTraderAgent":
-        """Create a brand-new Letta agent with initialized memory blocks.
-
-        Used by the bootstrap script only.
-        """
-        url = server_url or os.environ.get("LETTA_SERVER_URL", "http://localhost:8283")
-        client = create_client(base_url=url)
-
-        memory = BasicBlockMemory(blocks=[
-            Block(label="strategy_doc", value=INITIAL_STRATEGY_DOC, limit=5500),
-            Block(label="watchlist", value=INITIAL_WATCHLIST, limit=2000),
-            Block(label="performance_snapshot", value=INITIAL_PERFORMANCE_SNAPSHOT, limit=1000),
-            Block(label="today_context", value=INITIAL_TODAY_CONTEXT, limit=2000),
-        ])
-
-        # Pass API keys so Letta's tool executor subprocess can call external APIs
-        _env_keys = [
-            "FMP_API_KEY", "SERPER_API_KEY",
-            "ALPACA_API_KEY", "ALPACA_SECRET_KEY", "ALPACA_BASE_URL",
-            "TELEGRAM_BOT_TOKEN", "TELEGRAM_CHAT_ID",
-        ]
-        tool_env = {k: os.environ[k] for k in _env_keys if k in os.environ}
-
-        agent = client.create_agent(
-            name=agent_name,
-            llm_config={
-                "model": os.environ.get("OPENROUTER_MODEL", "anthropic/claude-3.5-sonnet"),
-                "model_endpoint_type": "openai",
-                "model_endpoint": "https://openrouter.ai/api/v1",
-                "context_window": int(os.environ.get("OPENROUTER_CONTEXT_WINDOW", "200000")),
-            },
-            memory=memory,
-            tool_exec_environment_variables=tool_env,
-        )
-        return cls(agent_id=agent.id, server_url=url)
+        self.memory.write(block_name, value)

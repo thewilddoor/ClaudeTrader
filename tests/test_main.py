@@ -6,7 +6,7 @@ from pathlib import Path
 @pytest.fixture
 def mock_agent():
     agent = MagicMock()
-    agent.send_session.return_value = '{"status": "ok"}'
+    agent.run_session.return_value = '{"status": "ok"}'
     agent.get_memory_block.return_value = "## Version metadata\nversion: v1\nstatus: confirmed\n\nbody"
     return agent
 
@@ -16,7 +16,7 @@ def test_run_session_calls_apply_change_on_proposed_change(mock_agent, tmp_path,
     (tmp_path / ".agent_id").write_text("agent-1")
     monkeypatch.setattr("scheduler.main.get_agent", lambda: mock_agent)
 
-    mock_agent.send_session.return_value = (
+    mock_agent.run_session.return_value = (
         '{"status": "ok", "proposed_change": {"description": "test change", '
         '"new_strategy_doc": "new doc"}}'
     )

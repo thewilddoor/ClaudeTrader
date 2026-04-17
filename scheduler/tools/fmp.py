@@ -43,12 +43,12 @@ def fmp_screener(
     return response.json()
 
 
-def fmp_ohlcv(ticker: str, limit: int = 90, api_key: Optional[str] = None) -> dict:
+def fmp_ohlcv(ticker: str, limit: int = 20, api_key: Optional[str] = None) -> dict:
     """Get daily OHLCV price data for a stock ticker.
 
     Args:
         ticker: Stock ticker symbol (e.g. AAPL, MSFT).
-        limit: Number of trading days of history to return (default 90, changeable).
+        limit: Number of trading days of history to return (default 20, changeable).
         api_key: FMP API key; reads from FMP_API_KEY env var if not provided.
 
     Returns:
