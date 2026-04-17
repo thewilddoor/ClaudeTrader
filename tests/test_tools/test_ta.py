@@ -388,7 +388,7 @@ def test_calc_patterns_returns_list(ohlcv_260):
     assert len(result) <= 5
     for p in result:
         assert "pattern" in p and "date" in p and "signal" in p
-        assert p["signal"] in ("bull", "bear", "neutral")
+        assert p["signal"] in ("bull", "bear")
 
 
 def test_calc_patterns_empty_when_no_signal():

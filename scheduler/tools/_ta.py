@@ -5,7 +5,6 @@ plain Python dicts/lists safe for JSON serialisation. NaN from TA-Lib warmup
 periods serialises as None, never 0 (zero RSI is a valid extreme value).
 """
 import math
-from collections import defaultdict
 from datetime import date as date_type, timedelta
 from typing import Optional
 
@@ -342,9 +341,10 @@ def calc_vwap(high: np.ndarray, low: np.ndarray, close: np.ndarray,
     anchored_cum_tp_vol = cum_tp_vol - anchor_tp_vol
     anchored_cum_vol = cum_vol - anchor_vol
 
+    safe_vol = np.where(anchored_cum_vol > 0, anchored_cum_vol, 1.0)
     vwap_series = np.where(
         anchored_cum_vol > 0,
-        anchored_cum_tp_vol / anchored_cum_vol,
+        anchored_cum_tp_vol / safe_vol,
         typical,
     )
 

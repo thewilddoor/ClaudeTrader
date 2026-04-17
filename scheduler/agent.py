@@ -372,7 +372,7 @@ TOOL_SCHEMAS = [
             "volume_1d (vol_ratio_1d/1w + 10d hi/lo; obv slope/vs_price/trend_days), "
             "price_structure (sr_1d: 3 support + 3 resistance with price/strength/last_tested; sr_1w: 2+2; pivot_1d: pp/r1/r2/s1/s2; wk52: hi/lo/pct/dist), "
             "ics_1d (order_blocks max 3 with type/date/ob_high/ob_low/ob_mid/tested/broken/stale; fvgs max 3; liquidity_levels max 4; market_structure with structure/last_hh/last_hl/msb; breaker_blocks max 2), "
-            "ics_1w (order_blocks max 2; market_structure), "
+            "ics_1w (order_blocks max 2; fvgs max 3; liquidity_levels max 4; market_structure; breaker_blocks max 2), "
             "patterns_1d/1w (list of {pattern, date, signal} for last 5/3 candles), "
             "alpha101 (20 WorldQuant signals: a1_momentum_peak, a2_vol_accel_corr, a3_open_vol_ranked, a4_support_floor, a6_open_vol_raw, a7_vol_gated, a9_regime_5d, a10_regime_4d, a12_capitulation, a20_gap_structure, a27_vwap_participation, a31_mean_rev, a32_vwap_persist, a34_vol_squeeze, a39_low_vol_drop, a41_geo_mid_vwap, a49_accel, a50_distribution, a55_range_vol_corr, a101_bar_quality). "
             "Priority alphas: a101_bar_quality (candlestick conviction), a12_capitulation (1-day vol-spike+drop), a34_vol_squeeze (relative squeeze), a49_accel (momentum acceleration), a7_vol_gated (volume-confirmed direction)."
