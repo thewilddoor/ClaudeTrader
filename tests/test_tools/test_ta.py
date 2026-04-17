@@ -88,3 +88,46 @@ def test_resample_weekly_groups_correctly():
     assert w1["l"] == 98.0           # min low
     assert w1["c"] == 106.0          # last close
     assert w1["v"] == pytest.approx(7.5e6)  # sum volume
+
+
+# ── Momentum tests ────────────────────────────────────────────────────────
+
+def test_calc_rsi_keys_and_range(ohlcv_260):
+    from scheduler.tools._ta import calc_rsi
+    result = calc_rsi(ohlcv_260["close"])
+    for period in [7, 14, 21]:
+        key = f"rsi_{period}"
+        assert key in result
+        cur = result[key]["cur"]
+        # ohlcv_260 has 260 candles — warmup is max 21 bars, so cur must be non-None
+        assert cur is not None, f"{key} cur should not be None with 260 candles"
+        assert 0.0 <= cur <= 100.0
+        assert "90d_hi" in result[key]
+        assert "90d_avg" in result[key]
+
+
+def test_calc_macd_keys(ohlcv_260):
+    from scheduler.tools._ta import calc_macd
+    result = calc_macd(ohlcv_260["close"])
+    for key in ["macd_line", "signal_line", "histogram", "crossover", "divergence"]:
+        assert key in result
+    assert result["crossover"] in ("bull", "bear", "none")
+    assert result["divergence"] in ("bull", "bear", "none")
+
+
+def test_calc_stoch_zones(ohlcv_260):
+    from scheduler.tools._ta import calc_stoch
+    result = calc_stoch(ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"])
+    for key in ["stoch_5", "stoch_14"]:
+        assert key in result
+        assert result[key]["zone"] in ("overbought", "oversold", "neutral")
+        assert result[key]["crossover"] in ("bull", "bear", "none")
+
+
+def test_calc_mfi_range(ohlcv_260):
+    from scheduler.tools._ta import calc_mfi
+    result = calc_mfi(ohlcv_260["high"], ohlcv_260["low"],
+                      ohlcv_260["close"], ohlcv_260["volume"])
+    cur = result["cur"]
+    assert cur is None or 0.0 <= cur <= 100.0
+    assert result["divergence"] in ("bull", "bear", "none")
