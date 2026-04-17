@@ -125,6 +125,7 @@ def bootstrap_memory_table(initial_values: dict) -> None:
 
     Idempotent — safe to call on every startup.
     """
+    Path(DB_PATH).parent.mkdir(parents=True, exist_ok=True)
     conn = _connect()
     try:
         conn.executescript(_MEMORY_SCHEMA)
