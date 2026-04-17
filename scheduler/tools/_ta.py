@@ -368,3 +368,137 @@ def calc_vwap(high: np.ndarray, low: np.ndarray, close: np.ndarray,
         "slope": slope,
         "vwap_series": vwap_series,  # full array for alpha functions
     }
+
+
+# ─── Volatility ──────────────────────────────────────────────────────────────
+
+def calc_atr(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> dict:
+    """ATR(14) with atr_pct, rolling averages, and regime classification."""
+    atr_vals = talib.ATR(high.astype("f8"), low.astype("f8"), close.astype("f8"), timeperiod=14)
+    cur_atr = float(atr_vals[-1]) if not np.isnan(atr_vals[-1]) else None
+    _, _, avg14 = _rolling_hi_lo_avg(atr_vals, 14)
+    _, _, avg30 = _rolling_hi_lo_avg(atr_vals, 30)
+
+    atr_pct = None
+    if cur_atr is not None and close[-1] != 0:
+        atr_pct = round(cur_atr / close[-1] * 100, 4)
+
+    atr_regime = "stable"
+    if cur_atr is not None and avg14 is not None:
+        if cur_atr > avg14 * 1.1:
+            atr_regime = "expanding"
+        elif cur_atr < avg14 * 0.9:
+            atr_regime = "contracting"
+
+    return {
+        "atr": _nan_to_none(atr_vals[-1]),
+        "atr_pct": atr_pct,
+        "14d_avg": avg14,
+        "30d_avg": avg30,
+        "atr_regime": atr_regime,
+    }
+
+
+def calc_bollinger(close: np.ndarray, period: int = 20) -> dict:
+    """Bollinger Bands at 1SD and 2SD with %B, bandwidth, and squeeze detection."""
+    c = close.astype("f8")
+    upper2, mid, lower2 = talib.BBANDS(c, timeperiod=period, nbdevup=2.0, nbdevdn=2.0)
+    upper1, _,  lower1  = talib.BBANDS(c, timeperiod=period, nbdevup=1.0, nbdevdn=1.0)
+
+    cur_upper2 = _nan_to_none(upper2[-1])
+    cur_mid    = _nan_to_none(mid[-1])
+    cur_lower2 = _nan_to_none(lower2[-1])
+    cur_upper1 = _nan_to_none(upper1[-1])
+    cur_lower1 = _nan_to_none(lower1[-1])
+
+    pct_b = None
+    bandwidth = None
+    if all(v is not None for v in [cur_upper2, cur_lower2, cur_mid]) and cur_mid != 0:
+        band_range = cur_upper2 - cur_lower2
+        pct_b = round((close[-1] - cur_lower2) / band_range, 4) if band_range != 0 else None
+        bandwidth = round(band_range / cur_mid * 100, 4)
+
+    # Squeeze: is current bandwidth in bottom 20% of 14-day bandwidth range?
+    squeeze = False
+    hi_bw, lo_bw = None, None
+    if cur_mid is not None:
+        bw_series = np.where(mid != 0, (upper2 - lower2) / mid * 100, np.nan)
+        hi_bw, lo_bw, _ = _rolling_hi_lo_avg(bw_series, 14)
+        if hi_bw is not None and lo_bw is not None and bandwidth is not None:
+            threshold = lo_bw + (hi_bw - lo_bw) * 0.20
+            squeeze = bandwidth <= threshold
+
+    return {
+        "upper_2sd": cur_upper2,
+        "mid":       cur_mid,
+        "lower_2sd": cur_lower2,
+        "upper_1sd": cur_upper1,
+        "lower_1sd": cur_lower1,
+        "pct_b":     pct_b,
+        "bandwidth": bandwidth,
+        "14d_bw_hi": hi_bw,
+        "14d_bw_lo": lo_bw,
+        "squeeze":   squeeze,
+    }
+
+
+# ─── Volume ──────────────────────────────────────────────────────────────────
+
+def calc_volume_ratio(volume: np.ndarray, w_volume: np.ndarray) -> dict:
+    """Volume ratio vs 20-day SMA (1D) and 20-week SMA (1W)."""
+    vol_sma20 = float(np.mean(volume[-20:])) if len(volume) >= 20 else float(np.mean(volume))
+    cur_vol_ratio = round(volume[-1] / vol_sma20, 4) if vol_sma20 > 0 else None
+
+    # 10-day high/low of vol_ratio for context
+    ratios_10d = volume[-10:] / vol_sma20 if vol_sma20 > 0 else np.ones(10)
+    hi_ratio = round(float(np.max(ratios_10d)), 4)
+    lo_ratio = round(float(np.min(ratios_10d)), 4)
+
+    # Weekly ratio
+    w_sma20 = float(np.mean(w_volume[-20:])) if len(w_volume) >= 20 else float(np.mean(w_volume))
+    cur_w_ratio = round(w_volume[-1] / w_sma20, 4) if w_sma20 > 0 else None
+
+    return {
+        "vol_ratio_1d": cur_vol_ratio,
+        "vol_ratio_1w": cur_w_ratio,
+        "10d_hi_ratio": hi_ratio,
+        "10d_lo_ratio": lo_ratio,
+    }
+
+
+def calc_obv(close: np.ndarray, volume: np.ndarray) -> dict:
+    """OBV with 21-EMA slope, price divergence, and consecutive trend days."""
+    obv = talib.OBV(close.astype("f8"), volume.astype("f8"))
+    obv_ema21 = talib.EMA(obv, timeperiod=21)
+
+    # Slope: OBV above/below its 21-EMA for last 5 bars
+    slope = "flat"
+    if not np.isnan(obv_ema21[-1]):
+        above = obv[-5:] > obv_ema21[-5:]
+        frac_above = np.sum(above) / 5
+        if frac_above >= 0.8:
+            slope = "up"
+        elif frac_above <= 0.2:
+            slope = "down"
+
+    # Divergence: OBV slope vs price slope over 14 bars
+    vs_price = "confirming"
+    if len(close) >= 14 and not np.isnan(obv[-14]):
+        price_dir = 1 if close[-1] > close[-14] else -1
+        obv_dir = 1 if obv[-1] > obv[-14] else -1
+        if price_dir != obv_dir:
+            vs_price = "diverging"
+
+    # Consecutive trend days: how many bars OBV has been above/below its EMA
+    trend_days = 0
+    if not np.isnan(obv_ema21[-1]):
+        above_now = obv[-1] > obv_ema21[-1]
+        for i in range(1, len(obv)):
+            if np.isnan(obv_ema21[-i]):
+                break
+            if (obv[-i] > obv_ema21[-i]) == above_now:
+                trend_days += 1
+            else:
+                break
+
+    return {"slope": slope, "vs_price": vs_price, "trend_days": trend_days}

@@ -186,3 +186,44 @@ def test_calc_vwap_returns_keys(ohlcv_260):
     assert result["slope"] in ("up", "down", "flat")
     assert "price_vs_vwap_pct" in result
     assert "vwap_series" in result  # internal — used by alpha27/32/41
+
+
+# ── Volatility + Volume tests ─────────────────────────────────────────────
+
+def test_calc_atr_regime(ohlcv_260):
+    from scheduler.tools._ta import calc_atr
+    result = calc_atr(ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"])
+    assert result["atr_regime"] in ("expanding", "contracting", "stable")
+    assert result["atr"] is None or result["atr"] > 0
+    assert "atr_pct" in result
+    assert "14d_avg" in result and "30d_avg" in result
+
+
+def test_calc_bollinger_pct_b_range(ohlcv_260):
+    from scheduler.tools._ta import calc_bollinger
+    result = calc_bollinger(ohlcv_260["close"])
+    assert "pct_b" in result
+    assert "squeeze" in result
+    assert isinstance(result["squeeze"], bool)
+    assert "upper_2sd" in result and "lower_2sd" in result
+    assert "upper_1sd" in result and "lower_1sd" in result
+    if result["upper_2sd"] is not None:
+        assert result["upper_2sd"] >= result["upper_1sd"]
+        assert result["lower_1sd"] >= result["lower_2sd"]
+
+
+def test_calc_volume_ratio_positive(ohlcv_260):
+    from scheduler.tools._ta import calc_volume_ratio
+    # Build fake weekly volume array
+    w_vol = ohlcv_260["volume"].reshape(-1, 5).sum(axis=1).astype(float)
+    result = calc_volume_ratio(ohlcv_260["volume"], w_vol)
+    assert result["vol_ratio_1d"] > 0
+    assert "10d_hi_ratio" in result and "10d_lo_ratio" in result
+
+
+def test_calc_obv_slope_is_categorical(ohlcv_260):
+    from scheduler.tools._ta import calc_obv
+    result = calc_obv(ohlcv_260["close"], ohlcv_260["volume"])
+    assert result["slope"] in ("up", "down", "flat")
+    assert result["vs_price"] in ("confirming", "diverging")
+    assert isinstance(result["trend_days"], int)
