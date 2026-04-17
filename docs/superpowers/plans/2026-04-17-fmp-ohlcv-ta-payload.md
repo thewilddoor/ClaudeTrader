@@ -205,7 +205,12 @@ from datetime import date as date_type, timedelta
 from typing import Optional
 
 import numpy as np
-import talib
+try:
+    import talib
+except ImportError as _e:  # pragma: no cover
+    raise ImportError(
+        "TA-Lib C library not installed. See Dockerfile for build instructions."
+    ) from _e
 
 
 # ─── Utilities ───────────────────────────────────────────────────────────────
@@ -328,14 +333,16 @@ def test_calc_rsi_keys_and_range(ohlcv_260):
         key = f"rsi_{period}"
         assert key in result
         cur = result[key]["cur"]
-        assert cur is None or 0.0 <= cur <= 100.0
+        # ohlcv_260 has 260 candles — warmup is max 21 bars, so cur must be non-None
+        assert cur is not None, f"{key} cur should not be None with 260 candles"
+        assert 0.0 <= cur <= 100.0
         assert "90d_hi" in result[key]
         assert "90d_avg" in result[key]
 
 
 def test_calc_macd_keys(ohlcv_260):
     from scheduler.tools._ta import calc_macd
-    result = calc_macd(ohlcv_260["close"], ohlcv_260["dates"])
+    result = calc_macd(ohlcv_260["close"])
     for key in ["macd_line", "signal_line", "histogram", "crossover", "divergence"]:
         assert key in result
     assert result["crossover"] in ("bull", "bear", "none")
@@ -394,7 +401,7 @@ def calc_rsi(close: np.ndarray, periods: list = None) -> dict:
     return result
 
 
-def calc_macd(close: np.ndarray, dates: list) -> dict:
+def calc_macd(close: np.ndarray) -> dict:
     """MACD(12,26,9) with histogram rolling stats, crossover detection, divergence."""
     c = close.astype("f8")
     macd_line, signal_line, histogram = talib.MACD(c, fastperiod=12, slowperiod=26, signalperiod=9)
@@ -550,7 +557,9 @@ def test_calc_adx_trend_strength(ohlcv_260):
     from scheduler.tools._ta import calc_adx
     result = calc_adx(ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"], timeframe="1d")
     assert result["trend_strength"] in ("strong", "trending", "ranging")
-    assert result["adx"] is None or result["adx"] >= 0
+    # ohlcv_260 has 260 candles — ADX warmup is ~28 bars, so adx must be non-None
+    assert result["adx"] is not None, "adx should not be None with 260 candles"
+    assert result["adx"] >= 0
     assert "di_plus" in result and "di_minus" in result
 
 
@@ -1215,6 +1224,56 @@ def test_calc_ics_wrapper(ohlcv_260):
     assert "liquidity_levels" in result
     assert "market_structure" in result
     assert "breaker_blocks" in result
+
+
+def test_calc_ics_wrapper_1w(ohlcv_260):
+    """1W timeframe uses resampled weekly arrays — same keys, no DI+ in structure."""
+    from scheduler.tools._ta import calc_ics, resample_weekly
+    import numpy as np
+    # Build weekly arrays by resampling daily fixture
+    daily_records = [
+        {"date": ohlcv_260["dates"][i], "open": float(ohlcv_260["open"][i]),
+         "high": float(ohlcv_260["high"][i]), "low": float(ohlcv_260["low"][i]),
+         "close": float(ohlcv_260["close"][i]), "volume": float(ohlcv_260["volume"][i])}
+        for i in range(len(ohlcv_260["dates"]))
+    ]
+    weekly = resample_weekly(daily_records)
+    w_open  = np.array([w["o"] for w in weekly])
+    w_high  = np.array([w["h"] for w in weekly])
+    w_low   = np.array([w["l"] for w in weekly])
+    w_close = np.array([w["c"] for w in weekly])
+    w_vol   = np.array([w["v"] for w in weekly])
+    w_dates = [w["d"] for w in weekly]
+
+    result = calc_ics(w_open, w_high, w_low, w_close, w_vol, w_dates, timeframe="1w")
+    assert "order_blocks" in result
+    assert "fvgs" in result
+    assert "liquidity_levels" in result
+    assert "market_structure" in result
+    assert "breaker_blocks" in result
+
+
+def test_order_block_stale_flag(ohlcv_260):
+    """OBs older than _STALE_DAYS bars should have stale=True."""
+    from scheduler.tools._ta import detect_order_blocks, _STALE_DAYS
+    import numpy as np
+    # Build a minimal array with a guaranteed bullish OB at bar 0
+    # (impulse large enough to exceed 2×ATR) — synthetic
+    n = _STALE_DAYS + 10
+    close = np.ones(n) * 100.0
+    open_ = np.ones(n) * 100.0
+    high  = np.ones(n) * 101.0
+    low   = np.ones(n) * 99.0
+    # Bar 0: bearish candle; bar 1: huge bullish impulse
+    close[0] = 98.0; open_[0] = 102.0   # bearish
+    close[1] = 110.0; open_[1] = 98.0   # large bullish impulse
+    high[1] = 111.0
+    dates = [f"2025-01-{(i % 28) + 1:02d}" for i in range(n)]
+    # Use atr=1.0 so impulse of 12 exceeds 2×ATR easily
+    obs = detect_order_blocks(open_, high, low, close, dates, atr=1.0)
+    # If any OBs detected at bar 0, they are > _STALE_DAYS bars ago => stale=True
+    if obs:
+        assert obs[-1]["stale"] is True, "OB at bar 0 should be marked stale"
 ```
 
 - [ ] **Step 2: Run to confirm failure**
@@ -2108,6 +2167,7 @@ def test_fmp_ohlcv_fallback_on_insufficient_data():
     result = fmp_ohlcv(ticker="TINY", limit=5, api_key="test")
     assert "error" in result
     assert result["error"] == "insufficient_data"
+    assert "raw_ohlcv" in result  # partial candles still returned for context
 ```
 
 - [ ] **Step 2: Remove the old test** — delete `test_fmp_ohlcv_returns_dataframe_dict` from `tests/test_tools/test_fmp.py` (it expects `{"symbol", "historical"}` which is the old format)
@@ -2161,9 +2221,14 @@ def fmp_ohlcv(ticker: str, limit: int = 5, api_key: Optional[str] = None) -> dic
     # FMP returns newest-first; sort oldest-first for all calculations
     records = sorted(records, key=lambda r: r["date"])
 
+    # Hard-reject below 30: not enough for even short-period indicators.
+    # Between 30-199 candles: TA-Lib returns NaN/None for long-period indicators
+    # (e.g., 90-day RSI stats) — graceful degradation per spec.
+    # 200+ candles gives full indicator coverage (spec quality threshold).
     if len(records) < 30:
         return {"symbol": ticker, "error": "insufficient_data",
-                "candles_received": len(records)}
+                "candles_received": len(records),
+                "raw_ohlcv": _rows(records, min(5, len(records)))}
 
     dates  = [r["date"]   for r in records]
     open_  = np.array([r["open"]   for r in records], dtype=float)
@@ -2209,7 +2274,7 @@ def fmp_ohlcv(ticker: str, limit: int = 5, api_key: Optional[str] = None) -> dic
             "ohlcv_1w": _wrows(weekly, limit),  # includes current partial week for display
             "momentum_1d": {
                 **_ta.calc_rsi(close),
-                **_ta.calc_macd(close, dates),
+                **_ta.calc_macd(close),
                 **_ta.calc_stoch(high, low, close),
                 **_ta.calc_mfi(high, low, close, volume),
             },
