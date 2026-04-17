@@ -908,6 +908,8 @@ def calc_patterns(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
         key = (item["date"], item["pattern"])
         if key not in seen:
             seen.add(key)
-            unique.append({"pattern": item["pattern"], "date": item["date"], "signal": item["signal"]})
+            # Filter out neutral signals — only return bull/bear patterns
+            if item["signal"] != "neutral":
+                unique.append({"pattern": item["pattern"], "date": item["date"], "signal": item["signal"]})
 
     return unique[:max_patterns]

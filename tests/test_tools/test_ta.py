@@ -393,13 +393,9 @@ def test_calc_patterns_returns_list(ohlcv_260):
 
 def test_calc_patterns_empty_when_no_signal():
     from scheduler.tools._ta import calc_patterns
-    # Trending candles with normal OHLC structure (no reversal patterns)
+    # Perfectly flat candles — no patterns should fire
     n = 20
-    close = np.arange(100.0, 100.0 + n, 1.0)
-    high = close + 0.5
-    low = close - 0.5
-    open_ = close - 0.2  # slightly bullish
-    result = calc_patterns(open_, high, low, close,
+    arr = np.ones(n) * 100.0
+    result = calc_patterns(arr, arr, arr, arr,
                            [f"2026-01-{i+1:02d}" for i in range(n)], lookback=5)
-    # Trending candles generally don't trigger patterns
-    assert isinstance(result, list)
+    assert result == []
