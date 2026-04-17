@@ -558,7 +558,7 @@ class AgentCore:
         for _ in range(MAX_TOOL_ITERATIONS):
             response = self.client.messages.create(
                 model=self.model,
-                max_tokens=4096,
+                max_tokens=8192,
                 system=system,
                 tools=TOOL_SCHEMAS,
                 messages=messages,
