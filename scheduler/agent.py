@@ -286,7 +286,7 @@ class LettaTraderAgent:
     ) -> "LettaTraderAgent":
         """Create a brand-new Letta agent with initialized memory blocks.
 
-        Used by the bootstrap script only — not covered by unit tests.
+        Used by the bootstrap script only.
         """
         url = server_url or os.environ.get("LETTA_SERVER_URL", "http://localhost:8283")
         client = create_client(base_url=url)
