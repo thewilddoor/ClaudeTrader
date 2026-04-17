@@ -619,3 +619,233 @@ def calc_52w_range(close: np.ndarray) -> dict:
         "dist_from_hi_pct": round((hi - cur) / hi * 100, 4) if hi != 0 else None,
         "dist_from_lo_pct": round((cur - lo) / lo * 100, 4) if lo != 0 else None,
     }
+
+
+# ─── Institutional Concepts ───────────────────────────────────────────────────
+
+_STALE_DAYS = 60  # OBs/FVGs older than this are marked stale
+
+
+def detect_order_blocks(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
+                         close: np.ndarray, dates: list, atr: float,
+                         min_impulse_atr: float = 2.0, max_count: int = 3) -> list:
+    """Detect unbroken Order Blocks.
+
+    Bullish OB: bearish candle (close < open) immediately before a bullish
+    impulse >= min_impulse_atr × ATR.
+    Bearish OB: bullish candle immediately before a bearish impulse of same size.
+    """
+    n = len(close)
+    obs = []
+    for i in range(1, n - 1):
+        impulse = abs(close[i + 1] - close[i])
+        if impulse < min_impulse_atr * atr:
+            continue
+        is_bullish_ob = (close[i] < open_[i] and close[i + 1] > open_[i + 1])
+        is_bearish_ob = (close[i] > open_[i] and close[i + 1] < open_[i + 1])
+        if not (is_bullish_ob or is_bearish_ob):
+            continue
+        ob_type = "bullish" if is_bullish_ob else "bearish"
+        ob_high = float(high[i])
+        ob_low  = float(low[i])
+        ob_mid  = round((ob_high + ob_low) / 2, 4)
+
+        # tested: any subsequent candle entered the OB zone
+        if is_bullish_ob:
+            tested = any(low[j] <= ob_high and high[j] >= ob_low for j in range(i + 2, n))
+            broken = any(close[j] < ob_low for j in range(i + 2, n))
+        else:
+            tested = any(low[j] <= ob_high and high[j] >= ob_low for j in range(i + 2, n))
+            broken = any(close[j] > ob_high for j in range(i + 2, n))
+
+        if broken:
+            continue  # skip broken OBs (they become breaker blocks)
+
+        stale = (n - 1 - i) > _STALE_DAYS
+        obs.append({
+            "type": ob_type, "date": dates[i],
+            "ob_high": round(ob_high, 4), "ob_low": round(ob_low, 4), "ob_mid": ob_mid,
+            "tested": tested, "broken": False, "stale": stale,
+        })
+
+    # Most recent unbroken OBs first
+    obs.reverse()
+    return obs[:max_count]
+
+
+def detect_fvg(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+               dates: list, min_gap_pct: float = 0.003, max_count: int = 3) -> list:
+    """Detect Fair Value Gaps (3-candle imbalance, gap >= min_gap_pct of close)."""
+    n = len(close)
+    fvgs = []
+    for i in range(1, n - 1):
+        # Bullish FVG: high[i-1] < low[i+1]
+        gap_lo = float(high[i - 1])
+        gap_hi = float(low[i + 1])
+        if gap_hi > gap_lo and (gap_hi - gap_lo) / max(close[i], 1e-10) >= min_gap_pct:
+            filled = any(low[j] <= gap_lo for j in range(i + 2, n))
+            if not filled:
+                fvgs.append({
+                    "type": "bullish", "date": dates[i],
+                    "gap_high": round(gap_hi, 4), "gap_low": round(gap_lo, 4),
+                    "gap_mid": round((gap_hi + gap_lo) / 2, 4),
+                    "filled": False, "fill_pct": 0.0,
+                    "stale": (n - 1 - i) > _STALE_DAYS,
+                })
+            continue
+        # Bearish FVG: low[i-1] > high[i+1]
+        gap_hi = float(low[i - 1])
+        gap_lo = float(high[i + 1])
+        if gap_hi > gap_lo and (gap_hi - gap_lo) / max(close[i], 1e-10) >= min_gap_pct:
+            filled = any(high[j] >= gap_hi for j in range(i + 2, n))
+            if not filled:
+                fvgs.append({
+                    "type": "bearish", "date": dates[i],
+                    "gap_high": round(gap_hi, 4), "gap_low": round(gap_lo, 4),
+                    "gap_mid": round((gap_hi + gap_lo) / 2, 4),
+                    "filled": False, "fill_pct": 0.0,
+                    "stale": (n - 1 - i) > _STALE_DAYS,
+                })
+
+    fvgs.reverse()
+    return fvgs[:max_count]
+
+
+def detect_liquidity_levels(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+                              dates: list, tolerance_pct: float = 0.002,
+                              min_touches: int = 2, max_count: int = 4) -> list:
+    """Equal highs/lows within tolerance = stop-order cluster (liquidity pool)."""
+    sh_idx, sl_idx = _find_swing_highs_lows(high, low)
+    cur_price = float(close[-1])
+
+    def cluster_levels(indices, arr, ltype):
+        pools = []
+        for idx in indices:
+            price = float(arr[idx])
+            matched = next((p for p in pools
+                            if abs(p["price"] - price) / max(p["price"], 1e-10) < tolerance_pct
+                            and p["type"] == ltype), None)
+            if matched:
+                matched["price"] = (matched["price"] * matched["touches"] + price) / (matched["touches"] + 1)
+                matched["touches"] += 1
+                matched["last_idx"] = max(matched["last_idx"], idx)
+            else:
+                pools.append({"type": ltype, "price": price, "touches": 1, "last_idx": idx})
+        return [p for p in pools if p["touches"] >= min_touches]
+
+    buy_side  = cluster_levels(sh_idx, high, "buy_side")
+    sell_side = cluster_levels(sl_idx, low,  "sell_side")
+
+    all_levels = buy_side + sell_side
+    all_levels.sort(key=lambda x: abs(x["price"] - cur_price))
+
+    result = []
+    buy_count = sell_count = 0
+    for lv in all_levels:
+        if lv["type"] == "buy_side" and buy_count >= max_count // 2:
+            continue
+        if lv["type"] == "sell_side" and sell_count >= max_count // 2:
+            continue
+        result.append({
+            "type": lv["type"],
+            "price": round(lv["price"], 4),
+            "touches": lv["touches"],
+            "swept": False,
+        })
+        if lv["type"] == "buy_side":
+            buy_count += 1
+        else:
+            sell_count += 1
+        if len(result) >= max_count:
+            break
+    return result
+
+
+def detect_market_structure(high: np.ndarray, low: np.ndarray,
+                              close: np.ndarray, dates: list) -> dict:
+    """Track HH/HL (uptrend) vs LH/LL (downtrend) and detect MSB."""
+    sh_idx, sl_idx = _find_swing_highs_lows(high, low)
+
+    last_highs = [(dates[i], round(float(high[i]), 4)) for i in sh_idx[-3:]]
+    last_lows  = [(dates[i], round(float(low[i]),  4)) for i in sl_idx[-3:]]
+
+    structure = "ranging"
+    if len(last_highs) >= 2 and len(last_lows) >= 2:
+        hh = last_highs[-1][1] > last_highs[-2][1]
+        hl = last_lows[-1][1]  > last_lows[-2][1]
+        lh = last_highs[-1][1] < last_highs[-2][1]
+        ll = last_lows[-1][1]  < last_lows[-2][1]
+        if hh and hl:
+            structure = "uptrend"
+        elif lh and ll:
+            structure = "downtrend"
+
+    last_hh = {"date": last_highs[-1][0], "price": last_highs[-1][1]} if last_highs else None
+    last_hl = {"date": last_lows[-1][0],  "price": last_lows[-1][1]}  if last_lows  else None
+
+    # MSB: close beyond last swing high (in downtrend) or last swing low (in uptrend)
+    msb = None
+    cur_close = float(close[-1])
+    if structure == "downtrend" and last_hh and cur_close > last_hh["price"]:
+        msb = {"direction": "bullish", "date": dates[-1], "level": last_hh["price"]}
+    elif structure == "uptrend" and last_hl and cur_close < last_hl["price"]:
+        msb = {"direction": "bearish", "date": dates[-1], "level": last_hl["price"]}
+
+    return {"structure": structure, "last_hh": last_hh, "last_hl": last_hl, "msb": msb}
+
+
+def detect_breaker_blocks(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
+                           close: np.ndarray, dates: list, atr: float,
+                           max_count: int = 2) -> list:
+    """Broken OBs that flip polarity — become high-probability reversal zones."""
+    n = len(close)
+    breakers = []
+    for i in range(1, n - 1):
+        impulse = abs(close[i + 1] - close[i])
+        if impulse < 2.0 * atr:
+            continue
+        is_bullish_ob = (close[i] < open_[i] and close[i + 1] > open_[i + 1])
+        is_bearish_ob = (close[i] > open_[i] and close[i + 1] < open_[i + 1])
+        if not (is_bullish_ob or is_bearish_ob):
+            continue
+        ob_high = float(high[i])
+        ob_low  = float(low[i])
+
+        # Check if broken: price closed beyond the OB's far edge
+        if is_bullish_ob:
+            broken = any(close[j] < ob_low for j in range(i + 2, n))
+            flip_type = "breaker_bear"
+        else:
+            broken = any(close[j] > ob_high for j in range(i + 2, n))
+            flip_type = "breaker_bull"
+
+        if not broken:
+            continue
+
+        stale = (n - 1 - i) > _STALE_DAYS
+        breakers.append({
+            "type": flip_type, "date": dates[i],
+            "ob_high": round(ob_high, 4), "ob_low": round(ob_low, 4),
+            "ob_mid": round((ob_high + ob_low) / 2, 4),
+            "stale": stale,
+        })
+
+    breakers.reverse()
+    return breakers[:max_count]
+
+
+def calc_ics(open_: np.ndarray, high: np.ndarray, low: np.ndarray,
+             close: np.ndarray, volume: np.ndarray, dates: list,
+             timeframe: str = "1d") -> dict:
+    """Convenience wrapper — assembles all IC sections for one timeframe."""
+    atr_vals = talib.ATR(high.astype("f8"), low.astype("f8"), close.astype("f8"), timeperiod=14)
+    atr = float(atr_vals[-1]) if not np.isnan(atr_vals[-1]) else float(np.nanmean(atr_vals))
+
+    ob_max = 3 if timeframe == "1d" else 2
+    return {
+        "order_blocks":     detect_order_blocks(open_, high, low, close, dates, atr, max_count=ob_max),
+        "fvgs":             detect_fvg(high, low, close, dates),
+        "liquidity_levels": detect_liquidity_levels(high, low, close, dates),
+        "market_structure": detect_market_structure(high, low, close, dates),
+        "breaker_blocks":   detect_breaker_blocks(open_, high, low, close, dates, atr),
+    }

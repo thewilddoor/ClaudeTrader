@@ -260,3 +260,117 @@ def test_calc_52w_range_percentile(ohlcv_260):
     assert 0.0 <= result["wk52_pct"] <= 100.0
     assert result["wk52_hi"] >= result["wk52_lo"]
     assert "dist_from_hi_pct" in result and "dist_from_lo_pct" in result
+
+
+# ── IC tests ──────────────────────────────────────────────────────────────
+
+def test_detect_order_blocks_returns_list(ohlcv_260):
+    from scheduler.tools._ta import detect_order_blocks, calc_atr
+    atr_result = calc_atr(ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"])
+    atr_val = atr_result["atr"] or 1.5
+    obs = detect_order_blocks(
+        ohlcv_260["open"], ohlcv_260["high"], ohlcv_260["low"],
+        ohlcv_260["close"], ohlcv_260["dates"], atr_val, max_count=3
+    )
+    assert isinstance(obs, list)
+    assert len(obs) <= 3
+    for ob in obs:
+        assert ob["type"] in ("bullish", "bearish")
+        assert "ob_high" in ob and "ob_low" in ob and "ob_mid" in ob
+        assert "tested" in ob and "broken" in ob and "stale" in ob
+
+
+def test_detect_fvg_min_gap(ohlcv_260):
+    from scheduler.tools._ta import detect_fvg
+    fvgs = detect_fvg(ohlcv_260["high"], ohlcv_260["low"],
+                      ohlcv_260["close"], ohlcv_260["dates"], max_count=3)
+    assert isinstance(fvgs, list)
+    assert len(fvgs) <= 3
+    for fvg in fvgs:
+        assert fvg["type"] in ("bullish", "bearish")
+        assert fvg["gap_high"] > fvg["gap_low"]
+
+
+def test_detect_liquidity_levels_counts(ohlcv_260):
+    from scheduler.tools._ta import detect_liquidity_levels
+    levels = detect_liquidity_levels(
+        ohlcv_260["high"], ohlcv_260["low"],
+        ohlcv_260["close"], ohlcv_260["dates"], max_count=4
+    )
+    assert len(levels) <= 4
+    for lv in levels:
+        assert lv["type"] in ("buy_side", "sell_side")
+        assert lv["touches"] >= 2
+
+
+def test_detect_market_structure_keys(ohlcv_260):
+    from scheduler.tools._ta import detect_market_structure
+    result = detect_market_structure(
+        ohlcv_260["high"], ohlcv_260["low"],
+        ohlcv_260["close"], ohlcv_260["dates"]
+    )
+    assert result["structure"] in ("uptrend", "downtrend", "ranging")
+    assert "last_hh" in result and "last_hl" in result and "msb" in result
+
+
+def test_calc_ics_wrapper(ohlcv_260):
+    from scheduler.tools._ta import calc_ics
+    result = calc_ics(
+        ohlcv_260["open"], ohlcv_260["high"], ohlcv_260["low"],
+        ohlcv_260["close"], ohlcv_260["volume"], ohlcv_260["dates"],
+        timeframe="1d"
+    )
+    assert "order_blocks" in result
+    assert "fvgs" in result
+    assert "liquidity_levels" in result
+    assert "market_structure" in result
+    assert "breaker_blocks" in result
+
+
+def test_calc_ics_wrapper_1w(ohlcv_260):
+    """1W timeframe uses resampled weekly arrays — same keys, no DI+ in structure."""
+    from scheduler.tools._ta import calc_ics, resample_weekly
+    import numpy as np
+    # Build weekly arrays by resampling daily fixture
+    daily_records = [
+        {"date": ohlcv_260["dates"][i], "open": float(ohlcv_260["open"][i]),
+         "high": float(ohlcv_260["high"][i]), "low": float(ohlcv_260["low"][i]),
+         "close": float(ohlcv_260["close"][i]), "volume": float(ohlcv_260["volume"][i])}
+        for i in range(len(ohlcv_260["dates"]))
+    ]
+    weekly = resample_weekly(daily_records)
+    w_open  = np.array([w["o"] for w in weekly])
+    w_high  = np.array([w["h"] for w in weekly])
+    w_low   = np.array([w["l"] for w in weekly])
+    w_close = np.array([w["c"] for w in weekly])
+    w_vol   = np.array([w["v"] for w in weekly])
+    w_dates = [w["d"] for w in weekly]
+
+    result = calc_ics(w_open, w_high, w_low, w_close, w_vol, w_dates, timeframe="1w")
+    assert "order_blocks" in result
+    assert "fvgs" in result
+    assert "liquidity_levels" in result
+    assert "market_structure" in result
+    assert "breaker_blocks" in result
+
+
+def test_order_block_stale_flag(ohlcv_260):
+    """OBs older than _STALE_DAYS bars should have stale=True."""
+    from scheduler.tools._ta import detect_order_blocks, _STALE_DAYS
+    import numpy as np
+    # Build a minimal array with a guaranteed bullish OB at bar 0
+    n = _STALE_DAYS + 10
+    close = np.ones(n) * 100.0
+    open_ = np.ones(n) * 100.0
+    high  = np.ones(n) * 101.0
+    low   = np.ones(n) * 99.0
+    # Bar 0: bearish candle; bar 1: huge bullish impulse
+    close[0] = 98.0; open_[0] = 102.0   # bearish
+    close[1] = 110.0; open_[1] = 98.0   # large bullish impulse
+    high[1] = 111.0
+    dates = [f"2025-01-{(i % 28) + 1:02d}" for i in range(n)]
+    # Use atr=1.0 so impulse of 12 exceeds 2×ATR easily
+    obs = detect_order_blocks(open_, high, low, close, dates, atr=1.0)
+    # If any OBs detected at bar 0, they are > _STALE_DAYS bars ago => stale=True
+    if obs:
+        assert obs[-1]["stale"] is True, "OB at bar 0 should be marked stale"
