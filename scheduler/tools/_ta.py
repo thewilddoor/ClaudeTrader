@@ -502,3 +502,120 @@ def calc_obv(close: np.ndarray, volume: np.ndarray) -> dict:
                 break
 
     return {"slope": slope, "vs_price": vs_price, "trend_days": trend_days}
+
+
+# ─── Price Structure ──────────────────────────────────────────────────────────
+
+def _find_swing_highs_lows(high: np.ndarray, low: np.ndarray,
+                            lookback: int = 5) -> tuple:
+    """Return (swing_high_indices, swing_low_indices) using `lookback`-bar window.
+
+    A bar is a swing high if its high is the maximum of the surrounding window.
+    Same 5-bar lookback used by S/R, liquidity levels, and market structure
+    to ensure consistency across all IC calculations.
+    """
+    n = len(high)
+    sh_idx, sl_idx = [], []
+    for i in range(lookback, n - lookback):
+        window_h = high[i - lookback: i + lookback + 1]
+        window_l = low[i - lookback: i + lookback + 1]
+        if high[i] == np.max(window_h):
+            sh_idx.append(i)
+        if low[i] == np.min(window_l):
+            sl_idx.append(i)
+    return sh_idx, sl_idx
+
+
+def calc_support_resistance(high: np.ndarray, low: np.ndarray, close: np.ndarray,
+                             volume: np.ndarray, dates: list,
+                             n_support: int = 3, n_resist: int = 3,
+                             cluster_pct: float = 0.005) -> list:
+    """Swing-based support/resistance levels with touch count and recency scoring.
+
+    Detection:
+    1. Find swing highs/lows (5-bar lookback, consistent with ICs).
+    2. Cluster levels within `cluster_pct` (0.5%) of each other.
+    3. Score = touch_count + recency_weight (more recent = higher).
+    4. Return top `n_support` below current price, top `n_resist` above.
+    """
+    sh_idx, sl_idx = _find_swing_highs_lows(high, low)
+    cur_price = float(close[-1])
+    n = len(close)
+
+    def cluster(prices_indices, is_high: bool):
+        levels = []
+        raw_vals = [(high[i] if is_high else low[i], i) for i in prices_indices]
+        for price, idx in raw_vals:
+            matched = None
+            for lv in levels:
+                if abs(lv["price"] - price) / max(lv["price"], 1e-10) < cluster_pct:
+                    matched = lv
+                    break
+            if matched:
+                matched["price"] = (matched["price"] * matched["touches"] + price) / (matched["touches"] + 1)
+                matched["touches"] += 1
+                matched["last_idx"] = max(matched["last_idx"], idx)
+            else:
+                levels.append({"price": price, "touches": 1, "last_idx": idx})
+        return levels
+
+    resist_levels = cluster(sh_idx, is_high=True)
+    support_levels = cluster(sl_idx, is_high=False)
+
+    def score(lv):
+        recency = lv["last_idx"] / n  # 0–1, higher = more recent
+        return lv["touches"] + recency * 0.5
+
+    def strength(touches):
+        if touches >= 3:
+            return "strong"
+        if touches == 2:
+            return "moderate"
+        return "weak"
+
+    result = []
+    above = sorted([lv for lv in resist_levels if lv["price"] > cur_price],
+                   key=score, reverse=True)[:n_resist]
+    below = sorted([lv for lv in support_levels if lv["price"] < cur_price],
+                   key=score, reverse=True)[:n_support]
+
+    for lv in above:
+        result.append({"type": "resistance", "price": round(lv["price"], 4),
+                        "strength": strength(lv["touches"]),
+                        "last_tested": dates[lv["last_idx"]]})
+    for lv in below:
+        result.append({"type": "support", "price": round(lv["price"], 4),
+                        "strength": strength(lv["touches"]),
+                        "last_tested": dates[lv["last_idx"]]})
+    return result
+
+
+def calc_pivot_points(high: np.ndarray, low: np.ndarray, close: np.ndarray) -> dict:
+    """Standard pivot points from previous day's H/L/C."""
+    ph, pl, pc = float(high[-2]), float(low[-2]), float(close[-2])
+    pp = (ph + pl + pc) / 3
+    r1 = 2 * pp - pl
+    r2 = pp + (ph - pl)
+    s1 = 2 * pp - ph
+    s2 = pp - (ph - pl)
+    return {
+        "pp": round(pp, 4), "r1": round(r1, 4), "r2": round(r2, 4),
+        "s1": round(s1, 4), "s2": round(s2, 4),
+    }
+
+
+def calc_52w_range(close: np.ndarray) -> dict:
+    """52-week high/low and percentile position of current close."""
+    days = min(252, len(close))
+    period = close[-days:]
+    hi = float(np.max(period))
+    lo = float(np.min(period))
+    cur = float(close[-1])
+    pct = round((cur - lo) / (hi - lo) * 100, 2) if hi != lo else 50.0
+    return {
+        "wk52_hi": round(hi, 4),
+        "wk52_lo": round(lo, 4),
+        "wk52_pct": pct,
+        "dist_from_hi_pct": round((hi - cur) / hi * 100, 4) if hi != 0 else None,
+        "dist_from_lo_pct": round((cur - lo) / lo * 100, 4) if lo != 0 else None,
+    }

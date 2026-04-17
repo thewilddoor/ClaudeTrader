@@ -227,3 +227,36 @@ def test_calc_obv_slope_is_categorical(ohlcv_260):
     assert result["slope"] in ("up", "down", "flat")
     assert result["vs_price"] in ("confirming", "diverging")
     assert isinstance(result["trend_days"], int)
+
+
+# ── Price structure tests ─────────────────────────────────────────────────
+
+def test_calc_support_resistance_counts(ohlcv_260):
+    from scheduler.tools._ta import calc_support_resistance
+    result = calc_support_resistance(
+        ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"],
+        ohlcv_260["volume"], ohlcv_260["dates"], n_support=3, n_resist=3
+    )
+    supports = [r for r in result if r["type"] == "support"]
+    resists  = [r for r in result if r["type"] == "resistance"]
+    assert len(supports) <= 3
+    assert len(resists) <= 3
+    if supports:
+        assert supports[0]["strength"] in ("strong", "moderate", "weak")
+        assert "last_tested" in supports[0]
+
+
+def test_calc_pivot_points_structure(ohlcv_260):
+    from scheduler.tools._ta import calc_pivot_points
+    result = calc_pivot_points(ohlcv_260["high"], ohlcv_260["low"], ohlcv_260["close"])
+    for key in ["pp", "r1", "r2", "s1", "s2"]:
+        assert key in result
+    assert result["r1"] > result["pp"] > result["s1"]
+
+
+def test_calc_52w_range_percentile(ohlcv_260):
+    from scheduler.tools._ta import calc_52w_range
+    result = calc_52w_range(ohlcv_260["close"])
+    assert 0.0 <= result["wk52_pct"] <= 100.0
+    assert result["wk52_hi"] >= result["wk52_lo"]
+    assert "dist_from_hi_pct" in result and "dist_from_lo_pct" in result
