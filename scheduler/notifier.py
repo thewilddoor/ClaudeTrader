@@ -137,6 +137,9 @@ def format_bypass_alert(version: str) -> str:
     )
 
 
+_TELEGRAM_MAX = 4096
+
+
 def send_telegram(
     message: str,
     bot_token: Optional[str] = None,
@@ -148,9 +151,37 @@ def send_telegram(
     try:
         resp = requests.post(
             f"https://api.telegram.org/bot{bot_token}/sendMessage",
-            json={"chat_id": chat_id, "text": message, "parse_mode": "HTML"},
+            json={"chat_id": chat_id, "text": message},
             timeout=10,
         )
         return resp.status_code == 200
     except Exception:
         return False
+
+
+def send_telegram_long(
+    message: str,
+    bot_token: Optional[str] = None,
+    chat_id: Optional[str] = None,
+) -> bool:
+    """Send a potentially long message, splitting into chunks if over Telegram's 4096-char limit."""
+    if len(message) <= _TELEGRAM_MAX:
+        return send_telegram(message, bot_token, chat_id)
+
+    parts: list[str] = []
+    current = ""
+    for line in message.splitlines(keepends=True):
+        if len(current) + len(line) > _TELEGRAM_MAX:
+            if current:
+                parts.append(current)
+            # If a single line exceeds the limit, hard-split it
+            while len(line) > _TELEGRAM_MAX:
+                parts.append(line[:_TELEGRAM_MAX])
+                line = line[_TELEGRAM_MAX:]
+            current = line
+        else:
+            current += line
+    if current:
+        parts.append(current)
+
+    return all(send_telegram(p, bot_token, chat_id) for p in parts)

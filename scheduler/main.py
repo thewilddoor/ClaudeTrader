@@ -27,8 +27,6 @@ from scheduler.sessions import (
 from scheduler.tools.sqlite import backup_trades_db
 from scheduler.notifier import (
     parse_session_output,
-    format_trade_notification,
-    format_eod_summary,
     format_error_notification,
     format_alert,
     format_probation_start,
@@ -37,6 +35,7 @@ from scheduler.notifier import (
     format_gate_blocked,
     format_bypass_alert,
     send_telegram,
+    send_telegram_long,
 )
 
 ET = ZoneInfo("America/New_York")
@@ -182,20 +181,14 @@ def run_session(session_type: str, prompt: str, max_retries: int = 1):
                             probation_result["new_avg_r"] or 0,
                         ))
 
-            # --- Existing notification logic ---
-            if session_type == "market_open" and output.get("trades"):
-                for trade in output["trades"]:
-                    send_telegram(format_trade_notification(trade))
-
+            # --- Notification logic ---
+            _REPORT_SESSIONS = {"pre_market", "market_open", "eod_reflection", "weekly_review"}
+            if session_type in _REPORT_SESSIONS and raw_output:
+                header = f"[{session_type.replace('_', ' ').upper()}]\n\n"
+                send_telegram_long(header + raw_output)
             elif session_type == "health_check" and output.get("alerts"):
                 for alert in output["alerts"]:
                     send_telegram(format_alert(alert))
-
-            elif session_type == "eod_reflection" and output:
-                send_telegram(format_eod_summary(output))
-
-            elif session_type == "weekly_review" and output:
-                send_telegram(f"📅 WEEKLY REVIEW COMPLETE\n{output.get('summary', '')}")
 
             try:
                 log_path = Path(f"/app/logs/sessions/{date.today().isoformat()}_{session_type}.json")
