@@ -15,7 +15,7 @@ from zoneinfo import ZoneInfo
 from apscheduler.schedulers.blocking import BlockingScheduler
 from apscheduler.triggers.cron import CronTrigger
 
-from scheduler.agent import LettaTraderAgent
+from scheduler.agent import AgentCore
 from scheduler import strategy_gate
 from scheduler.sessions import (
     build_pre_market_prompt,
@@ -39,7 +39,7 @@ from scheduler.notifier import (
 )
 
 ET = ZoneInfo("America/New_York")
-AGENT_ID_FILE = Path("/app/state/.agent_id")
+AGENT_ID_FILE = Path("/app/state/.agent_id")  # kept for backwards compat / tests
 PENDING_FEEDBACK_PATH = Path("/app/state/pending_feedback.txt")
 SESSION_TIMEOUT = 900  # 15 minutes
 
@@ -47,10 +47,8 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(mess
 log = logging.getLogger(__name__)
 
 
-def get_agent() -> LettaTraderAgent:
-    if not AGENT_ID_FILE.exists():
-        raise RuntimeError("No agent ID found. Run bootstrap first: python -m scheduler.bootstrap")
-    return LettaTraderAgent(agent_id=AGENT_ID_FILE.read_text().strip())
+def get_agent() -> AgentCore:
+    return AgentCore()
 
 
 def _read_and_clear_pending_feedback() -> Optional[str]:
@@ -120,7 +118,7 @@ def run_session(session_type: str, prompt: str, max_retries: int = 1):
         try:
             log.info(f"Starting session: {session_type} (attempt {attempt + 1})")
             agent = get_agent()
-            raw_output = agent.send_session(prompt)
+            raw_output = agent.run_session(session_type, prompt)
             output = parse_session_output(raw_output)
 
             # --- Strategy gate ---
