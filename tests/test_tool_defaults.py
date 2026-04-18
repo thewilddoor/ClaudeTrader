@@ -55,14 +55,20 @@ def test_run_script_memory_limit_is_512mb():
     assert "256 * 1024 * 1024" not in src, "Old 256MB limit still present"
 
 
-def test_fmp_screener_docstring_has_changeable():
+def test_fmp_screener_has_expanded_params():
+    """fmp_screener should expose the full filter set including beta, sector, price, and PEAD."""
     src = pathlib.Path("scheduler/tools/fmp.py").read_text()
     tree = ast.parse(src)
     for node in ast.walk(tree):
         if isinstance(node, ast.FunctionDef) and node.name == "fmp_screener":
-            docstring = ast.get_docstring(node) or ""
-            assert docstring.count("changeable") >= 4, \
-                f"fmp_screener docstring should have 4+ 'changeable', found: {docstring.count('changeable')}"
+            arg_names = {a.arg for a in node.args.args}
+            required_params = {
+                "beta_more_than", "beta_less_than",
+                "sector", "price_more_than",
+                "pead", "pead_min_surprise_pct", "pead_lookback_days",
+            }
+            missing = required_params - arg_names
+            assert not missing, f"fmp_screener missing params: {missing}"
             return
     raise AssertionError("fmp_screener not found")
 

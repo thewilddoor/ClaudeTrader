@@ -6,7 +6,13 @@ so they work reliably inside the Docker network without private-IP restrictions.
 """
 import os
 from letta_client import Letta
-from scheduler.tools.fmp import fmp_screener, fmp_ta, fmp_check_current_price, fmp_news, fmp_earnings_calendar
+from scheduler.tools.fmp import (
+    fmp_screener,
+    fmp_ta,
+    fmp_check_current_price,
+    fmp_news,
+    fmp_earnings_calendar,
+)
 from scheduler.tools.serper import serper_search
 from scheduler.tools.pyexec import run_script
 from scheduler.tools.alpaca import (

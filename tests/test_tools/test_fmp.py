@@ -2,20 +2,59 @@ import json
 import responses
 import pytest
 from datetime import date, timedelta
-from scheduler.tools.fmp import fmp_screener, fmp_ta, fmp_check_current_price, fmp_news, fmp_earnings_calendar
+from scheduler.tools.fmp import (
+    fmp_screener,
+    fmp_ta,
+    fmp_check_current_price,
+    fmp_news,
+    fmp_earnings_calendar,
+)
+
+_SCREENER_URL = "https://financialmodelingprep.com/stable/company-screener"
+_SAMPLE_STOCK = {"symbol": "AAPL", "marketCap": 3_000_000_000_000, "volume": 60_000_000, "beta": 1.3, "sector": "Technology"}
 
 
 @responses.activate
 def test_fmp_screener_returns_list():
-    responses.add(
-        responses.GET,
-        "https://financialmodelingprep.com/stable/company-screener",
-        json=[{"symbol": "AAPL", "marketCap": 3000000000000, "volume": 60000000}],
-        status=200,
-    )
-    result = fmp_screener(market_cap_more_than=1000000000, volume_more_than=500000, api_key="test")
+    responses.add(responses.GET, _SCREENER_URL, json=[_SAMPLE_STOCK], status=200)
+    result = fmp_screener(market_cap_more_than=1_000_000_000, volume_more_than=500_000, api_key="test")
     assert isinstance(result, list)
     assert result[0]["symbol"] == "AAPL"
+
+
+@responses.activate
+def test_fmp_screener_sends_new_params():
+    """Expanded screener sends beta, sector, price, and isActivelyTrading params."""
+    responses.add(responses.GET, _SCREENER_URL, json=[_SAMPLE_STOCK], status=200)
+    fmp_screener(
+        market_cap_more_than=2_000_000_000,
+        price_more_than=15.0,
+        beta_more_than=1.0,
+        beta_less_than=2.5,
+        sector="Technology",
+        is_actively_trading=True,
+        is_etf=False,
+        limit=20,
+        api_key="test",
+    )
+    sent_params = responses.calls[0].request.url
+    assert "betaMoreThan=1.0" in sent_params or "betaMoreThan=1" in sent_params
+    assert "betaLowerThan=2.5" in sent_params
+    assert "sector=Technology" in sent_params
+    assert "priceMoreThan=15.0" in sent_params or "priceMoreThan=15" in sent_params
+    assert "isActivelyTrading=true" in sent_params
+    assert "isEtf=false" in sent_params
+
+
+@responses.activate
+def test_fmp_screener_omits_none_params():
+    """Optional params set to None must not appear in the request URL."""
+    responses.add(responses.GET, _SCREENER_URL, json=[], status=200)
+    fmp_screener(beta_more_than=None, sector=None, dividend_more_than=None, api_key="test")
+    sent_params = responses.calls[0].request.url
+    assert "betaMoreThan" not in sent_params
+    assert "sector" not in sent_params
+    assert "dividendMoreThan" not in sent_params
 
 
 def _make_fmp_records(n: int = 260) -> list:
