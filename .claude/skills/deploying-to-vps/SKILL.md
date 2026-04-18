@@ -11,6 +11,8 @@ Code lives on local machine and GitHub. The VPS runs the Docker stack. Deploymen
 
 **Docker Compose version:** The VPS uses Compose v2 — command is `docker compose` (space, no hyphen). `docker-compose` does not exist and will fail.
 
+Password is: 6@@r/g2n^.7Zkpt
+
 ---
 
 ## Standard Deploy (code change only, no schema/tool/memory changes)
@@ -43,9 +45,9 @@ docker compose exec scheduler python -m scheduler.bootstrap
 ```
 
 Bootstrap is safe to re-run anytime:
-- If `.agent_id` exists → skips agent creation, re-registers all tools only
-- Schema changes (`ALTER TABLE`, new tables) are idempotent — wrapped in `try/except`
-- **Does NOT insert `strategy_versions` v1 seed** when agent already exists — that only runs in the first-ever bootstrap. If you need the v1 row on an existing install, insert it manually (see below).
+- Initialises SQLite trade store (idempotent)
+- Seeds memory and session_log tables (idempotent)
+- Seeds `strategy_versions` v1 row only if it doesn't exist yet
 
 ---
 
@@ -63,15 +65,15 @@ docker compose exec -e PYTHONPATH=/app scheduler python scripts/one_time/<script
 
 ## Inserting the v1 Strategy Versions Seed (existing installs only)
 
-Bootstrap only seeds the v1 row during first-ever agent creation. On an existing install after adding the `strategy_versions` table, insert it manually:
+Bootstrap only seeds the v1 row when it doesn't exist. On an existing install after adding the `strategy_versions` table, insert it manually:
 
 ```bash
 docker compose exec -e PYTHONPATH=/app scheduler python3 -c "
 from scheduler.tools.sqlite import _connect
-from scheduler.agent import INITIAL_STRATEGY_DOC
+from scheduler.agent import STATIC_PROMPT
 meta = '## Version metadata\nversion: v1\nstatus: confirmed\npromote_after: 20\nbaseline_win_rate: null\nbaseline_avg_r: null\n\n'
 conn = _connect()
-conn.execute(\"INSERT OR IGNORE INTO strategy_versions (version, status, doc_text, promote_after) VALUES ('v1', 'confirmed', ?, 20)\", (meta + INITIAL_STRATEGY_DOC,))
+conn.execute(\"INSERT OR IGNORE INTO strategy_versions (version, status, doc_text, promote_after) VALUES ('v1', 'confirmed', ?, 20)\", (meta + STATIC_PROMPT,))
 conn.commit()
 print('done')
 conn.close()
@@ -89,7 +91,7 @@ docker compose ps
 # No import errors or crash loops
 docker compose logs --tail=50 scheduler
 
-# Schema present (run against scheduler, not letta)
+# Schema present
 docker compose exec scheduler python3 -c "
 from scheduler.tools.sqlite import _connect
 conn = _connect()
@@ -108,7 +110,7 @@ conn.close()
 | Situation | Command |
 |---|---|
 | Code-only change | `git pull && docker compose up -d --build` |
-| Tool signature changed | + `docker compose exec scheduler python -m scheduler.bootstrap` |
+| Schema or tool change | + `docker compose exec scheduler python -m scheduler.bootstrap` |
 | Agent memory needs update | + `docker compose exec -e PYTHONPATH=/app scheduler python scripts/one_time/<script>.py` |
 | Check logs | `docker compose logs -f scheduler` |
 | Restart one service | `docker compose restart scheduler` |
@@ -122,7 +124,6 @@ conn.close()
 |---|---|
 | Using `docker-compose` | VPS has Compose v2 — use `docker compose` (space) |
 | Running one-time scripts without `PYTHONPATH=/app` | `ModuleNotFoundError: No module named 'scheduler'` |
-| Assuming bootstrap seeds v1 on existing installs | It doesn't — v1 seed only runs in first-ever `create_new` path |
+| Assuming bootstrap seeds v1 on existing installs | It only inserts if the row doesn't exist — safe to re-run |
 | Pushing to `master` | Repo uses `main` |
 | Rebuilding with `docker compose build` then `up -d` separately | Use `docker compose up -d --build` — one command does both |
-| Verifying schema via `letta` container | Use `scheduler` container — letta may not have sqlite3 |
