@@ -408,10 +408,9 @@ TOOL_SCHEMAS = [
     {
         "name": "fmp_screener",
         "description": (
-            "Raw stock screener with full parameter set. "
-            "Prefer fmp_screen_momentum / fmp_screen_earnings_catalyst / "
-            "fmp_screen_quality_defensive / fmp_screen_short_candidates for standard strategies. "
-            "Use this directly only for custom filter combinations not covered by presets. "
+            "Unified stock screener with full parameter set (pead=True by default). "
+            "Default call fmp_screener() is always valid — returns a broad universe plus PEAD candidates. "
+            "Set beta, sector, market_cap, volume, or price params when you have a regime reason. "
             "Valid sector values: Technology, Healthcare, Consumer Cyclical, Consumer Defensive, "
             "Financial Services, Industrials, Energy, Basic Materials, "
             "Communication Services, Real Estate, Utilities."
