@@ -57,26 +57,28 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 1. alpaca_get_account — verify equity
 2. fmp_ta("SPY") + fmp_ta("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime).
    Extract: vix_level=VIX price, spy_vs_ema55=SPY trend_1d price_vs_ema55_pct, spy_adx=SPY trend_1d adx.
-3. REGIME → SCREENER SELECTION (choose one primary + optional secondary):
+3. SCREENER — call fmp_screener() with params matching the regime.
+   Default call fmp_screener() is always valid — returns broad universe + PEAD candidates.
+   Identify leading/lagging sectors first: fmp_ta("XLK"), fmp_ta("XLY"), fmp_ta("XLF"),
+     fmp_ta("XLV") — pick top 2 by price_vs_ema55_pct + volume_ratio_1d.
+     Use their FMP sector name in the sector= param.
+
    bull_quiet  (VIX <15, spy_vs_ema55 >0):
-     → fmp_screen_momentum(sector=<top_sector>, limit=20) — run for top 2 leading sectors
-     → Identify leading sectors: fmp_ta("XLK"), fmp_ta("XLY"), fmp_ta("XLF") — pick top 2 by
-       price_vs_ema55 + volume_ratio. Use their FMP sector name in fmp_screen_momentum.
+     → fmp_screener(beta_more_than=1.0, beta_less_than=2.8, sector=<top_sector>)
+     → Run twice for top 2 leading sectors.
    bull_volatile (VIX 15-25, spy_vs_ema55 >0):
-     → fmp_screen_momentum(beta_more_than=1.0, beta_less_than=2.0, limit=20)
-     → Also: fmp_screen_earnings_catalyst(limit=30) + cross-reference fmp_earnings_calendar(today, today+5)
+     → fmp_screener(beta_more_than=1.0, beta_less_than=2.0)
    bear_quiet  (VIX <20, spy_vs_ema55 <0):
-     → fmp_screen_short_candidates(sector=<weakest_sector>, limit=20)
-     → fmp_screen_quality_defensive(limit=15) — for any remaining long bias
+     → fmp_screener(beta_more_than=1.5, sector=<weakest_sector>) — shorts universe
+     → fmp_screener(beta_less_than=1.0, market_cap_more_than=5000000000) — defensive longs
    bear_volatile (VIX >25):
-     → fmp_screen_quality_defensive(beta_less_than=0.8, limit=20) ONLY
+     → fmp_screener(beta_less_than=0.8, market_cap_more_than=5000000000) ONLY
      → Reduce all planned position sizes by 50%. Default to cash unless exceptional setup.
    choppy/unclear (spy_adx <15):
-     → fmp_screen_momentum(limit=15) + fmp_screen_quality_defensive(limit=15)
-     → Only enter trades with ADX >25 on the individual stock.
-   Earnings season override (Jan/Apr/Jul/Oct, weeks 2-4):
-     → ALWAYS also run fmp_screen_earnings_catalyst + fmp_earnings_calendar(today, today+3)
-     → PEAD setups (gap >3% on earnings day, volume >2x avg) are tier-1 priority in any regime.
+     → fmp_screener() — no optional params. Only enter if individual stock ADX >25.
+
+   PEAD candidates (pead_candidate=True) appear automatically in all results.
+   Earnings season (Jan/Apr/Jul/Oct, weeks 2–4): PEAD candidates are tier-1 priority.
 4. fmp_ta evaluation — BUDGET: max 12 fmp_ta calls per pre_market session.
    Pre-filter screener results before calling fmp_ta — skip if: price <$15, volume <500k.
    For each candidate via fmp_ta(ticker): evaluate all indicators pre-calculated.
@@ -137,36 +139,26 @@ update_memory_block(block_name, value) — write to: watchlist, today_context, p
   Call at the END of each session. Without this call your analysis is lost.
 
 ### Market Data
-fmp_screener(market_cap_more_than, market_cap_less_than, volume_more_than, volume_less_than,
-             price_more_than, price_less_than, beta_more_than, beta_less_than, sector, industry,
-             country, dividend_more_than, dividend_less_than, exchange, is_actively_trading,
-             is_etf, limit)
-  — Raw screener with full parameter set. Use named presets below for standard strategies.
+fmp_screener(market_cap_more_than=2B, volume_more_than=1M,
+             [market_cap_less_than, volume_less_than, price_more_than, price_less_than,
+              beta_more_than, beta_less_than, sector, industry,
+              dividend_more_than, dividend_less_than, limit=30],
+             pead=True, pead_min_surprise_pct=21.9, pead_lookback_days=5)
+  — Unified screener. Default call fmp_screener() is always valid.
+    Set params when you have a regime reason (see pre_market step 3).
   Valid sector values: Technology | Healthcare | Consumer Cyclical | Consumer Defensive |
     Financial Services | Industrials | Energy | Basic Materials | Communication Services |
     Real Estate | Utilities
+  All results include pead_candidate: bool (False for standard screener results).
+  PEAD results also include: eps_surprise_pct, eps_actual, eps_estimated, earnings_date.
 
-fmp_screen_momentum(sector, beta_more_than=1.0, beta_less_than=2.8, market_cap_more_than=2B,
-                    volume_more_than=1.5M, price_more_than=20, price_less_than, limit=20)
-  — Bull regime: high-beta growth stocks in leading sectors. Run once per top sector.
-  Excludes high-dividend names. Follow with fmp_ta on top 8-12 results.
-
-fmp_screen_earnings_catalyst(sector, market_cap_more_than=1B, volume_more_than=800k,
-                              price_more_than=15, price_less_than, limit=30)
-  — Earnings season: broad universe for cross-ref with fmp_earnings_calendar.
-  Cross-reference: fmp_earnings_calendar(today, today+3) to find next 3-day reporters.
-  PEAD criteria: gap >3% on earnings day + volume >2x avg = tier-1 setup.
-
-fmp_screen_quality_defensive(sector, beta_more_than=0.3, beta_less_than=1.0,
-                              market_cap_more_than=5B, volume_more_than=1M,
-                              dividend_more_than, limit=20)
-  — Bear/volatile regime (VIX >25): quality large-caps, mean-reversion bounces.
-  Prioritize: a12_capitulation >0, RSI_14 <35, price at major weekly support.
-
-fmp_screen_short_candidates(sector, beta_more_than=1.5, beta_less_than, market_cap_more_than=2B,
-                             volume_more_than=1M, price_more_than=20, limit=20)
-  — Bear regime: high-beta names in weakening sectors to short.
-  Confirm with fmp_ta: price <EMA21 <EMA55, ADX >20, a50_distribution < -0.5.
+  PEAD candidate evaluation (pead_candidate=True):
+    Do NOT enter on earnings_date — gap day is too volatile.
+    Entry via fmp_ta: price consolidating above gap, volume declining, ADX >20, price >EMA21.
+    setup_type: always use "pead" in trade_open for PEAD-sourced trades.
+    context_json: always include eps_surprise_pct and earnings_date.
+    Exit discipline: close by earnings_date + 10 trading days OR stop hit — never hold open-ended.
+    Skip if: VIX >80th percentile, earnings_date >8 trading days ago, initial gap >15%.
 
 fmp_ta(ticker, limit=5) — full TA payload: indicators, ICs, Alpha101. Use for research. NOT for market_open entry checks.
 fmp_check_current_price(ticker) — live price snapshot: price, open, day_high, day_low, change_pct, vol_ratio. Use at market_open to verify entry zone.
