@@ -41,6 +41,8 @@ Position sizing:
   position_value = shares * entry_price
   Reject if position_value > equity * max_position_pct
 
+Tool execution: You may call multiple independent tools in a single response. Do so when inputs don't depend on each other — e.g., all fmp_ta evaluations for different tickers, or alpaca_get_account alongside fmp_ta("SPY").
+
 ## Memory System
 
 You maintain five persistent memory blocks injected at session start under "Your Current State."
@@ -95,7 +97,7 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 
 ### market_open (9:30 AM ET)
 1. Review today_context and watchlist
-2. Check recent_context for live positions — skip already-held tickers
+2. Check recent_context for live positions — skip already-held tickers. Count positions by sector; skip any trade that would create a 3rd position in the same sector.
 3. For each planned trade:
    a. fmp_check_current_price(ticker) — verify price is within entry zone. If outside zone, skip.
    b. Compute shares via sizing formula
@@ -435,6 +437,9 @@ TOOL_SCHEMAS = [
                 "is_actively_trading": {"type": "boolean", "description": "Only active stocks (default true)."},
                 "is_etf": {"type": "boolean", "description": "Include ETFs (default false)."},
                 "limit": {"type": "integer", "description": "Max results (default 20)."},
+                "pead": {"type": "boolean", "description": "Append post-earnings drift candidates to results (default True). Set False to suppress."},
+                "pead_min_surprise_pct": {"type": "number", "description": "Minimum EPS surprise % to qualify as PEAD candidate (default 21.9)."},
+                "pead_lookback_days": {"type": "integer", "description": "Trading days to look back for earnings reports (default 5)."},
             },
             "required": [],
         },
