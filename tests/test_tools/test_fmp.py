@@ -12,19 +12,31 @@ from scheduler.tools.fmp import (
 
 _SCREENER_URL = "https://financialmodelingprep.com/stable/company-screener"
 _SAMPLE_STOCK = {"symbol": "AAPL", "marketCap": 3_000_000_000_000, "volume": 60_000_000, "beta": 1.3, "sector": "Technology"}
+_BULK_SURPRISES_URL = "https://financialmodelingprep.com/stable/earnings-surprises-bulk"
+_QUOTE_URL = "https://financialmodelingprep.com/stable/quote"
+
+
+def _recent_trading_date() -> str:
+    """Return the most recent weekday (Mon–Fri) as ISO string."""
+    d = date.today()
+    while d.weekday() >= 5:
+        d -= timedelta(days=1)
+    return d.isoformat()
 
 
 @responses.activate
 def test_fmp_screener_returns_list():
     responses.add(responses.GET, _SCREENER_URL, json=[_SAMPLE_STOCK], status=200)
-    result = fmp_screener(market_cap_more_than=1_000_000_000, volume_more_than=500_000, api_key="test")
+    result = fmp_screener(market_cap_more_than=1_000_000_000, volume_more_than=500_000,
+                          pead=False, api_key="test")
     assert isinstance(result, list)
     assert result[0]["symbol"] == "AAPL"
+    assert result[0]["pead_candidate"] is False
 
 
 @responses.activate
 def test_fmp_screener_sends_new_params():
-    """Expanded screener sends beta, sector, price, and isActivelyTrading params."""
+    """Expanded screener sends beta, sector, price params."""
     responses.add(responses.GET, _SCREENER_URL, json=[_SAMPLE_STOCK], status=200)
     fmp_screener(
         market_cap_more_than=2_000_000_000,
@@ -32,9 +44,8 @@ def test_fmp_screener_sends_new_params():
         beta_more_than=1.0,
         beta_less_than=2.5,
         sector="Technology",
-        is_actively_trading=True,
-        is_etf=False,
         limit=20,
+        pead=False,
         api_key="test",
     )
     sent_params = responses.calls[0].request.url
@@ -42,15 +53,14 @@ def test_fmp_screener_sends_new_params():
     assert "betaLowerThan=2.5" in sent_params
     assert "sector=Technology" in sent_params
     assert "priceMoreThan=15.0" in sent_params or "priceMoreThan=15" in sent_params
-    assert "isActivelyTrading=true" in sent_params
-    assert "isEtf=false" in sent_params
 
 
 @responses.activate
 def test_fmp_screener_omits_none_params():
     """Optional params set to None must not appear in the request URL."""
     responses.add(responses.GET, _SCREENER_URL, json=[], status=200)
-    fmp_screener(beta_more_than=None, sector=None, dividend_more_than=None, api_key="test")
+    fmp_screener(beta_more_than=None, sector=None, dividend_more_than=None,
+                 pead=False, api_key="test")
     sent_params = responses.calls[0].request.url
     assert "betaMoreThan" not in sent_params
     assert "sector" not in sent_params
@@ -201,3 +211,94 @@ def test_fmp_earnings_calendar_returns_list():
     result = fmp_earnings_calendar(from_date="2026-04-10", to_date="2026-04-30", api_key="test")
     assert isinstance(result, list)
     assert result[0]["symbol"] == "AAPL"
+
+
+@responses.activate
+def test_fmp_screener_pead_off_makes_one_call():
+    """pead=False makes exactly 1 HTTP call — no earnings or quote calls."""
+    responses.add(responses.GET, _SCREENER_URL, json=[_SAMPLE_STOCK], status=200)
+    result = fmp_screener(pead=False, api_key="test")
+    assert len(responses.calls) == 1
+    assert result[0]["pead_candidate"] is False
+
+
+@responses.activate
+def test_fmp_screener_pead_on_merges_candidates():
+    """pead=True merges earnings surprise candidates into results with correct fields."""
+    earnings_date = _recent_trading_date()
+
+    responses.add(responses.GET, _SCREENER_URL,
+                  json=[{"symbol": "MSFT", "marketCap": 3_000_000_000_000,
+                         "volume": 5_000_000, "sector": "Technology"}],
+                  status=200)
+    responses.add(responses.GET, _BULK_SURPRISES_URL,
+                  json=[{"symbol": "NVDA", "date": earnings_date,
+                         "actualEarningResult": 5.16, "estimatedEarning": 3.84}],
+                  status=200)
+    responses.add(responses.GET, _QUOTE_URL,
+                  json=[{"symbol": "NVDA", "price": 892.0,
+                         "marketCap": 2_200_000_000_000, "avgVolume": 3_400_000,
+                         "volume": 4_000_000, "sector": "Technology"}],
+                  status=200)
+
+    result = fmp_screener(pead=True, api_key="test")
+
+    assert len(responses.calls) == 3
+    symbols = {r["symbol"] for r in result}
+    assert "MSFT" in symbols
+    assert "NVDA" in symbols
+
+    msft = next(r for r in result if r["symbol"] == "MSFT")
+    assert msft["pead_candidate"] is False
+    assert "eps_surprise_pct" not in msft
+
+    nvda = next(r for r in result if r["symbol"] == "NVDA")
+    assert nvda["pead_candidate"] is True
+    assert nvda["eps_surprise_pct"] == pytest.approx(34.375, rel=0.01)
+    assert nvda["eps_actual"] == 5.16
+    assert nvda["eps_estimated"] == 3.84
+    assert nvda["earnings_date"] == earnings_date
+
+
+@responses.activate
+def test_fmp_screener_pead_deduplicates_on_symbol():
+    """When a ticker appears in both screener and PEAD results, PEAD version wins."""
+    earnings_date = _recent_trading_date()
+
+    responses.add(responses.GET, _SCREENER_URL,
+                  json=[{"symbol": "AAPL", "marketCap": 3_000_000_000_000,
+                         "volume": 60_000_000, "sector": "Technology"}],
+                  status=200)
+    responses.add(responses.GET, _BULK_SURPRISES_URL,
+                  json=[{"symbol": "AAPL", "date": earnings_date,
+                         "actualEarningResult": 2.18, "estimatedEarning": 1.70}],
+                  status=200)
+    responses.add(responses.GET, _QUOTE_URL,
+                  json=[{"symbol": "AAPL", "price": 185.0,
+                         "marketCap": 3_000_000_000_000, "avgVolume": 50_000_000,
+                         "volume": 60_000_000, "sector": "Technology"}],
+                  status=200)
+
+    result = fmp_screener(pead=True, api_key="test")
+
+    aapl_entries = [r for r in result if r["symbol"] == "AAPL"]
+    assert len(aapl_entries) == 1, "Duplicate AAPL entries found"
+    assert aapl_entries[0]["pead_candidate"] is True
+
+
+@responses.activate
+def test_fmp_screener_pead_year_boundary_calls_two_bulk_years():
+    """In January, PEAD sub-flow calls earnings-surprises-bulk for both current and prior year."""
+    from unittest.mock import patch
+
+    responses.add(responses.GET, _SCREENER_URL, json=[], status=200)
+    responses.add(responses.GET, _BULK_SURPRISES_URL, json=[], status=200)
+    responses.add(responses.GET, _BULK_SURPRISES_URL, json=[], status=200)
+
+    with patch("scheduler.tools.fmp._get_today", return_value=date(2026, 1, 3)):
+        fmp_screener(pead=True, api_key="test")
+
+    bulk_calls = [c for c in responses.calls if "earnings-surprises-bulk" in c.request.url]
+    assert len(bulk_calls) == 2
+    years = {c.request.url.split("year=")[1].split("&")[0] for c in bulk_calls}
+    assert years == {"2026", "2025"}
