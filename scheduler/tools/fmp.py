@@ -1,67 +1,193 @@
 # scheduler/tools/fmp.py
 """Financial Modeling Prep (FMP) market data tools."""
 from typing import Optional
+from datetime import date, timedelta
+
+
+def _get_today() -> date:
+    """Returns today's date. Module-level for testability (patchable in tests)."""
+    return date.today()
+
+
+def _last_n_trading_days(n: int, today: date) -> set:
+    """Return a set of ISO date strings for the last n Mon–Fri days including today."""
+    dates: set = set()
+    d = today
+    while len(dates) < n:
+        if d.weekday() < 5:
+            dates.add(d.isoformat())
+        d -= timedelta(days=1)
+    return dates
+
+
+def _fetch_pead_candidates(
+    api_key: str,
+    market_cap_more_than: int,
+    volume_more_than: int,
+    sector: Optional[str],
+    pead_min_surprise_pct: float,
+    pead_lookback_days: int,
+) -> list:
+    """Fetch PEAD candidates via FMP bulk earnings surprises + quote batch.
+
+    Returns list of dicts with pead_candidate=True and earnings fields.
+    Applies market_cap_more_than, volume_more_than, and sector filters.
+    """
+    import requests
+
+    today = _get_today()
+    trading_dates = _last_n_trading_days(pead_lookback_days, today)
+
+    years = [today.year]
+    if today.month == 1:
+        years.append(today.year - 1)
+
+    raw_surprises: list = []
+    for year in years:
+        resp = requests.get(
+            "https://financialmodelingprep.com/stable/earnings-surprises-bulk",
+            params={"year": year, "apikey": api_key},
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        if isinstance(data, list):
+            raw_surprises.extend(data)
+
+    qualified: list = []
+    for item in raw_surprises:
+        earnings_date = item.get("date", "")
+        if earnings_date not in trading_dates:
+            continue
+        eps_estimated = item.get("estimatedEarning") or item.get("epsEstimated")
+        eps_actual = item.get("actualEarningResult") or item.get("epsActual")
+        if eps_estimated is None or eps_actual is None:
+            continue
+        if abs(float(eps_estimated)) <= 0.01:
+            continue
+        surprise_pct = (
+            (float(eps_actual) - float(eps_estimated)) / abs(float(eps_estimated)) * 100
+        )
+        if surprise_pct < pead_min_surprise_pct:
+            continue
+        qualified.append({
+            "symbol": item["symbol"],
+            "eps_actual": round(float(eps_actual), 4),
+            "eps_estimated": round(float(eps_estimated), 4),
+            "eps_surprise_pct": round(surprise_pct, 2),
+            "earnings_date": earnings_date,
+        })
+
+    if not qualified:
+        return []
+
+    qualified.sort(key=lambda x: x["eps_surprise_pct"], reverse=True)
+    qualified = qualified[:20]
+
+    symbols_str = ",".join(q["symbol"] for q in qualified)
+    resp = requests.get(
+        "https://financialmodelingprep.com/stable/quote",
+        params={"symbol": symbols_str, "apikey": api_key},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    raw_quotes = resp.json()
+    quote_map: dict = {}
+    if isinstance(raw_quotes, list):
+        quote_map = {q["symbol"]: q for q in raw_quotes}
+
+    candidates: list = []
+    for item in qualified:
+        sym = item["symbol"]
+        q = quote_map.get(sym, {})
+        mkt_cap = float(q.get("marketCap") or 0)
+        avg_vol = float(q.get("avgVolume") or 0)
+        sym_sector = q.get("sector") or ""
+
+        if mkt_cap < market_cap_more_than:
+            continue
+        if avg_vol < volume_more_than:
+            continue
+        if sector is not None and sym_sector != sector:
+            continue
+
+        candidates.append({
+            "symbol": sym,
+            "price": round(float(q.get("price") or 0), 2),
+            "marketCap": int(mkt_cap),
+            "volume": int(q.get("volume") or 0),
+            "sector": sym_sector,
+            "pead_candidate": True,
+            "eps_surprise_pct": item["eps_surprise_pct"],
+            "eps_actual": item["eps_actual"],
+            "eps_estimated": item["eps_estimated"],
+            "earnings_date": item["earnings_date"],
+        })
+
+    return candidates
 
 
 def fmp_screener(
     market_cap_more_than: int = 2_000_000_000,
-    market_cap_less_than: Optional[int] = None,
     volume_more_than: int = 1_000_000,
+    market_cap_less_than: Optional[int] = None,
     volume_less_than: Optional[int] = None,
-    price_more_than: Optional[float] = 15.0,
+    price_more_than: Optional[float] = None,
     price_less_than: Optional[float] = None,
     beta_more_than: Optional[float] = None,
     beta_less_than: Optional[float] = None,
     sector: Optional[str] = None,
     industry: Optional[str] = None,
-    country: str = "US",
     dividend_more_than: Optional[float] = None,
     dividend_less_than: Optional[float] = None,
-    exchange: str = "NYSE,NASDAQ",
-    is_actively_trading: bool = True,
-    is_etf: bool = False,
-    limit: int = 20,
+    limit: int = 30,
+    pead: bool = True,
+    pead_min_surprise_pct: float = 21.9,
+    pead_lookback_days: int = 5,
     api_key: Optional[str] = None,
 ) -> list:
-    """Screen US stocks with full filter support. Use directly for all strategy types
-    including momentum, defensive, earnings catalyst, and short candidates.
+    """Screen US stocks with full filter support. PEAD candidates are automatically
+    appended when pead=True (default).
 
     Args:
         market_cap_more_than: Minimum market cap in USD (default 2 billion).
-        market_cap_less_than: Maximum market cap in USD (optional).
         volume_more_than: Minimum average daily volume (default 1 million).
+        market_cap_less_than: Maximum market cap in USD (optional).
         volume_less_than: Maximum average daily volume (optional).
-        price_more_than: Minimum stock price in USD (default $15 — excludes micro-cap noise).
+        price_more_than: Minimum stock price in USD (optional).
         price_less_than: Maximum stock price in USD (optional).
-        beta_more_than: Minimum beta — use >1.0 for momentum, >1.5 for aggressive (optional).
-        beta_less_than: Maximum beta — use <1.0 for defensive/quality (optional).
+        beta_more_than: Minimum beta — use >1.0 for momentum, >1.5 for shorts (optional).
+        beta_less_than: Maximum beta — use <1.0 for defensive (optional).
         sector: Sector filter (optional). Valid values: Technology, Healthcare,
             Consumer Cyclical, Consumer Defensive, Financial Services, Industrials,
             Energy, Basic Materials, Communication Services, Real Estate, Utilities.
         industry: Industry sub-filter within sector (optional).
-        country: Country filter (default US).
-        dividend_more_than: Minimum dividend yield — use for income/defensive screens (optional).
-        dividend_less_than: Maximum dividend yield — use to exclude REITs/utilities (optional).
-        exchange: Comma-separated exchanges (default NYSE,NASDAQ).
-        is_actively_trading: Only include actively traded stocks (default True).
-        is_etf: Include ETFs (default False — exclude ETFs).
-        limit: Maximum results (default 20 — keep small; follow with fmp_ta on top candidates).
+        dividend_more_than: Minimum dividend yield (optional).
+        dividend_less_than: Maximum dividend yield — set 0.5 to exclude high-yield names (optional).
+        limit: Maximum screener results (default 30).
+        pead: When True, appends post-earnings drift candidates to results (default True).
+            PEAD candidates have pead_candidate=True plus eps_surprise_pct, eps_actual,
+            eps_estimated, earnings_date fields.
+        pead_min_surprise_pct: Minimum EPS surprise % to qualify as PEAD candidate (default 21.9).
+        pead_lookback_days: Trading days to look back for earnings reports (default 5).
         api_key: FMP API key; reads from FMP_API_KEY env var if not provided.
 
     Returns:
-        list: Matching stock records with symbol, price, volume, marketCap, beta, sector fields.
+        list: Stock records. All items have pead_candidate: bool.
+              PEAD items additionally have eps_surprise_pct, eps_actual, eps_estimated, earnings_date.
     """
     import os
     import requests
 
     api_key = api_key or os.environ["FMP_API_KEY"]
+
     params: dict = {
         "marketCapMoreThan": market_cap_more_than,
         "volumeMoreThan": volume_more_than,
-        "exchange": exchange,
-        "isActivelyTrading": str(is_actively_trading).lower(),
-        "isEtf": str(is_etf).lower(),
-        "country": country,
+        "exchange": "NYSE,NASDAQ",
+        "isActivelyTrading": "true",
+        "isEtf": "false",
+        "country": "US",
         "limit": limit,
         "apikey": api_key,
     }
@@ -92,7 +218,26 @@ def fmp_screener(
         timeout=30,
     )
     response.raise_for_status()
-    return response.json()
+    results = [{**r, "pead_candidate": False} for r in response.json()]
+
+    if not pead:
+        return results
+
+    pead_candidates = _fetch_pead_candidates(
+        api_key=api_key,
+        market_cap_more_than=market_cap_more_than,
+        volume_more_than=volume_more_than,
+        sector=sector,
+        pead_min_surprise_pct=pead_min_surprise_pct,
+        pead_lookback_days=pead_lookback_days,
+    )
+
+    if pead_candidates:
+        pead_symbols = {p["symbol"] for p in pead_candidates}
+        results = [r for r in results if r["symbol"] not in pead_symbols]
+        results.extend(pead_candidates)
+
+    return results
 
 
 def fmp_ta(ticker: str, limit: int = 5, api_key: Optional[str] = None) -> dict:
