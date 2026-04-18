@@ -55,10 +55,39 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 
 ### pre_market (6:00 AM ET)
 1. alpaca_get_account — verify equity
-2. fmp_ta("SPY") + fmp_ta("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime). Can still use run_script with market_regime_detector for cross-asset breadth if needed.
-3. fmp_screener to find candidates (volume > 1M, mkt_cap > 2B)
-4. For each candidate: fmp_ta(ticker) — all indicators pre-calculated. Add fmp_news, fmp_earnings_calendar for qualitative context.
-5. update_memory_block("today_context", ...) with regime + top 5-10 setups
+2. fmp_ta("SPY") + fmp_ta("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime).
+   Extract: vix_level=VIX price, spy_vs_ema55=SPY trend_1d price_vs_ema55_pct, spy_adx=SPY trend_1d adx.
+3. REGIME → SCREENER SELECTION (choose one primary + optional secondary):
+   bull_quiet  (VIX <15, spy_vs_ema55 >0):
+     → fmp_screen_momentum(sector=<top_sector>, limit=20) — run for top 2 leading sectors
+     → Identify leading sectors: fmp_ta("XLK"), fmp_ta("XLY"), fmp_ta("XLF") — pick top 2 by
+       price_vs_ema55 + volume_ratio. Use their FMP sector name in fmp_screen_momentum.
+   bull_volatile (VIX 15-25, spy_vs_ema55 >0):
+     → fmp_screen_momentum(beta_more_than=1.0, beta_less_than=2.0, limit=20)
+     → Also: fmp_screen_earnings_catalyst(limit=30) + cross-reference fmp_earnings_calendar(today, today+5)
+   bear_quiet  (VIX <20, spy_vs_ema55 <0):
+     → fmp_screen_short_candidates(sector=<weakest_sector>, limit=20)
+     → fmp_screen_quality_defensive(limit=15) — for any remaining long bias
+   bear_volatile (VIX >25):
+     → fmp_screen_quality_defensive(beta_less_than=0.8, limit=20) ONLY
+     → Reduce all planned position sizes by 50%. Default to cash unless exceptional setup.
+   choppy/unclear (spy_adx <15):
+     → fmp_screen_momentum(limit=15) + fmp_screen_quality_defensive(limit=15)
+     → Only enter trades with ADX >25 on the individual stock.
+   Earnings season override (Jan/Apr/Jul/Oct, weeks 2-4):
+     → ALWAYS also run fmp_screen_earnings_catalyst + fmp_earnings_calendar(today, today+3)
+     → PEAD setups (gap >3% on earnings day, volume >2x avg) are tier-1 priority in any regime.
+4. fmp_ta evaluation — BUDGET: max 12 fmp_ta calls per pre_market session.
+   Pre-filter screener results before calling fmp_ta — skip if: price <$15, volume <500k.
+   For each candidate via fmp_ta(ticker): evaluate all indicators pre-calculated.
+   Prioritize for watchlist:
+     Longs:  price >EMA21 >EMA55, ADX >20, volume_ratio_1d >1.2, wk52 pct >70%,
+             a101_bar_quality >0, a7_vol_gated >0
+     Shorts: price <EMA21 <EMA55, ADX >20, RSI_14 <50 (not yet oversold), a50_distribution < -0.5
+     Earnings: consolidating near 52-wk high, volume declining pre-earnings (coiling)
+   Skip tickers with earnings in next 5 days UNLESS running earnings_catalyst strategy.
+   Add fmp_news(tickers, limit=5) for final 5-8 candidates only.
+5. update_memory_block("today_context", ...) with regime + screener used + top 5-10 setups
 6. update_memory_block("watchlist", ...) with max 12 entries
 7. hypothesis_log new theses as "formed"
 
@@ -108,7 +137,37 @@ update_memory_block(block_name, value) — write to: watchlist, today_context, p
   Call at the END of each session. Without this call your analysis is lost.
 
 ### Market Data
-fmp_screener(market_cap_more_than, volume_more_than, exchange, limit)
+fmp_screener(market_cap_more_than, market_cap_less_than, volume_more_than, volume_less_than,
+             price_more_than, price_less_than, beta_more_than, beta_less_than, sector, industry,
+             country, dividend_more_than, dividend_less_than, exchange, is_actively_trading,
+             is_etf, limit)
+  — Raw screener with full parameter set. Use named presets below for standard strategies.
+  Valid sector values: Technology | Healthcare | Consumer Cyclical | Consumer Defensive |
+    Financial Services | Industrials | Energy | Basic Materials | Communication Services |
+    Real Estate | Utilities
+
+fmp_screen_momentum(sector, beta_more_than=1.0, beta_less_than=2.8, market_cap_more_than=2B,
+                    volume_more_than=1.5M, price_more_than=20, price_less_than, limit=20)
+  — Bull regime: high-beta growth stocks in leading sectors. Run once per top sector.
+  Excludes high-dividend names. Follow with fmp_ta on top 8-12 results.
+
+fmp_screen_earnings_catalyst(sector, market_cap_more_than=1B, volume_more_than=800k,
+                              price_more_than=15, price_less_than, limit=30)
+  — Earnings season: broad universe for cross-ref with fmp_earnings_calendar.
+  Cross-reference: fmp_earnings_calendar(today, today+3) to find next 3-day reporters.
+  PEAD criteria: gap >3% on earnings day + volume >2x avg = tier-1 setup.
+
+fmp_screen_quality_defensive(sector, beta_more_than=0.3, beta_less_than=1.0,
+                              market_cap_more_than=5B, volume_more_than=1M,
+                              dividend_more_than, limit=20)
+  — Bear/volatile regime (VIX >25): quality large-caps, mean-reversion bounces.
+  Prioritize: a12_capitulation >0, RSI_14 <35, price at major weekly support.
+
+fmp_screen_short_candidates(sector, beta_more_than=1.5, beta_less_than, market_cap_more_than=2B,
+                             volume_more_than=1M, price_more_than=20, limit=20)
+  — Bear regime: high-beta names in weakening sectors to short.
+  Confirm with fmp_ta: price <EMA21 <EMA55, ADX >20, a50_distribution < -0.5.
+
 fmp_ta(ticker, limit=5) — full TA payload: indicators, ICs, Alpha101. Use for research. NOT for market_open entry checks.
 fmp_check_current_price(ticker) — live price snapshot: price, open, day_high, day_low, change_pct, vol_ratio. Use at market_open to verify entry zone.
 fmp_news(tickers, limit=10)
@@ -356,14 +415,35 @@ TOOL_SCHEMAS = [
     },
     {
         "name": "fmp_screener",
-        "description": "Screen US stocks by market cap and volume.",
+        "description": (
+            "Raw stock screener with full parameter set. "
+            "Prefer fmp_screen_momentum / fmp_screen_earnings_catalyst / "
+            "fmp_screen_quality_defensive / fmp_screen_short_candidates for standard strategies. "
+            "Use this directly only for custom filter combinations not covered by presets. "
+            "Valid sector values: Technology, Healthcare, Consumer Cyclical, Consumer Defensive, "
+            "Financial Services, Industrials, Energy, Basic Materials, "
+            "Communication Services, Real Estate, Utilities."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
-                "market_cap_more_than": {"type": "integer"},
-                "volume_more_than": {"type": "integer"},
-                "exchange": {"type": "string"},
-                "limit": {"type": "integer"},
+                "market_cap_more_than": {"type": "integer", "description": "Min market cap in USD (default 2B)."},
+                "market_cap_less_than": {"type": "integer", "description": "Max market cap in USD (optional)."},
+                "volume_more_than": {"type": "integer", "description": "Min average daily volume (default 1M)."},
+                "volume_less_than": {"type": "integer", "description": "Max average daily volume (optional)."},
+                "price_more_than": {"type": "number", "description": "Min stock price USD (default $15)."},
+                "price_less_than": {"type": "number", "description": "Max stock price USD (optional)."},
+                "beta_more_than": {"type": "number", "description": "Min beta — >1.0 for momentum, >1.5 aggressive."},
+                "beta_less_than": {"type": "number", "description": "Max beta — <1.0 for defensive."},
+                "sector": {"type": "string", "description": "Sector filter (optional)."},
+                "industry": {"type": "string", "description": "Industry sub-filter (optional)."},
+                "country": {"type": "string", "description": "Country code (default US)."},
+                "dividend_more_than": {"type": "number", "description": "Min dividend yield (optional)."},
+                "dividend_less_than": {"type": "number", "description": "Max dividend yield (optional)."},
+                "exchange": {"type": "string", "description": "Exchanges (default NYSE,NASDAQ)."},
+                "is_actively_trading": {"type": "boolean", "description": "Only active stocks (default true)."},
+                "is_etf": {"type": "boolean", "description": "Include ETFs (default false)."},
+                "limit": {"type": "integer", "description": "Max results (default 20)."},
             },
             "required": [],
         },
@@ -497,7 +577,10 @@ def _build_tool_functions() -> dict:
         alpaca_get_account, alpaca_get_positions, alpaca_place_order,
         alpaca_list_orders, alpaca_cancel_order,
     )
-    from scheduler.tools.fmp import fmp_screener, fmp_ta, fmp_check_current_price, fmp_news, fmp_earnings_calendar
+    from scheduler.tools.fmp import (
+        fmp_screener,
+        fmp_ta, fmp_check_current_price, fmp_news, fmp_earnings_calendar,
+    )
     from scheduler.tools.serper import serper_search
     from scheduler.tools.pyexec import run_script
     return {

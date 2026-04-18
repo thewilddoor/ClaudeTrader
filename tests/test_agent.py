@@ -182,7 +182,8 @@ def test_tool_schemas_covers_all_tools():
         "trade_open", "trade_close", "hypothesis_log", "trade_query",
         "alpaca_get_account", "alpaca_get_positions", "alpaca_place_order",
         "alpaca_list_orders", "alpaca_cancel_order",
-        "fmp_screener", "fmp_ta", "fmp_check_current_price", "fmp_news", "fmp_earnings_calendar",
+        "fmp_screener",
+        "fmp_ta", "fmp_check_current_price", "fmp_news", "fmp_earnings_calendar",
         "serper_search", "run_script", "update_memory_block",
     }
     assert required == names
