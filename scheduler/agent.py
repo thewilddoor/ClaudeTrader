@@ -55,9 +55,9 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 
 ### pre_market (6:00 AM ET)
 1. alpaca_get_account — verify equity
-2. fmp_ohlcv("SPY") + fmp_ohlcv("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime). Can still use run_script with market_regime_detector for cross-asset breadth if needed.
+2. fmp_ta("SPY") + fmp_ta("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime). Can still use run_script with market_regime_detector for cross-asset breadth if needed.
 3. fmp_screener to find candidates (volume > 1M, mkt_cap > 2B)
-4. For each candidate: fmp_ohlcv(ticker) — all indicators pre-calculated. Add fmp_news, fmp_earnings_calendar for qualitative context.
+4. For each candidate: fmp_ta(ticker) — all indicators pre-calculated. Add fmp_news, fmp_earnings_calendar for qualitative context.
 5. update_memory_block("today_context", ...) with regime + top 5-10 setups
 6. update_memory_block("watchlist", ...) with max 12 entries
 7. hypothesis_log new theses as "formed"
@@ -65,12 +65,14 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 ### market_open (9:30 AM ET)
 1. Review today_context and watchlist
 2. Check recent_context for live positions — skip already-held tickers
-3. For each trade where conditions are met:
-   a. Compute shares via sizing formula
-   b. trade_open(...) FIRST — get trade_id
-   c. alpaca_place_order(...)
-   d. hypothesis_log(id, "testing", f"Opened trade_id {trade_id} at {entry}")
-4. Skip trades where price is outside entry zone — do not chase
+3. For each planned trade:
+   a. fmp_check_current_price(ticker) — verify price is within entry zone. If outside zone, skip.
+   b. Compute shares via sizing formula
+   c. trade_open(...) FIRST — get trade_id
+   d. alpaca_place_order(...)
+   e. alpaca_list_orders(status="closed") — confirm fill. If not filled/rejected: trade_close(trade_id, 0, "order_failed", 0, 0)
+   f. hypothesis_log(id, "testing", f"Opened trade_id {trade_id} at {fill_price}")
+4. Do NOT call fmp_ta at market_open — the pre_market analysis is authoritative. fmp_check_current_price is sufficient.
 
 CRITICAL: trade_open MUST be called BEFORE alpaca_place_order. If the order fails after trade_open succeeds, call trade_close(trade_id, 0, "order_failed", 0, 0) immediately to prevent an orphaned open record. If trade_open fails, do not place the order.
 No proposed_change in market_open — system rejects it.
@@ -107,14 +109,15 @@ update_memory_block(block_name, value) — write to: watchlist, today_context, p
 
 ### Market Data
 fmp_screener(market_cap_more_than, volume_more_than, exchange, limit)
-fmp_ohlcv(ticker, limit=5) — returns full TA payload (indicators, ICs, Alpha101). limit=raw candles exposed only.
+fmp_ta(ticker, limit=5) — full TA payload: indicators, ICs, Alpha101. Use for research. NOT for market_open entry checks.
+fmp_check_current_price(ticker) — live price snapshot: price, open, day_high, day_low, change_pct, vol_ratio. Use at market_open to verify entry zone.
 fmp_news(tickers, limit=10)
 fmp_earnings_calendar(from_date, to_date)
 serper_search(query)
 
 ### Code Execution
 run_script(code, timeout=30, scripts_dir="/app/scripts")
-- NO API credentials inside scripts — pre-fetch data with fmp_ohlcv first
+- NO API credentials inside scripts — pre-fetch data with fmp_ta first
 - Embed fetched data as Python variables in the script string
 - End scripts with: print(json.dumps(result))
 
@@ -366,9 +369,11 @@ TOOL_SCHEMAS = [
         },
     },
     {
-        "name": "fmp_ohlcv",
+        "name": "fmp_ta",
         "description": (
             "Get a pre-calculated professional TA payload for a ticker (1D and 1W). "
+            "Use for research and analysis (pre_market, health_check, eod_reflection). "
+            "At market_open, use fmp_check_current_price instead — it is faster and cheaper when you only need to verify entry zone before placing an order. "
             "Returns: meta (symbol, as_of, price), ohlcv_1d/1w (last `limit` candles, default 5), "
             "momentum_1d (rsi_7/14/21 each with cur+7d/14d/30d/90d hi/lo/avg; macd with crossover+divergence; stoch_5/stoch_14 with k/d/zone/crossover; mfi with divergence), "
             "trend_1d (ema_samples every-5-candles for ema21/55/89 + alignment + price_vs_ema_pct; adx/di_plus/di_minus/trend_strength; vwap/slope/price_vs_vwap_pct), "
@@ -391,6 +396,23 @@ TOOL_SCHEMAS = [
             "properties": {
                 "ticker": {"type": "string"},
                 "limit": {"type": "integer", "description": "Raw OHLCV candles to expose (default 5). Does not affect indicator calculation depth."},
+            },
+            "required": ["ticker"],
+        },
+    },
+    {
+        "name": "fmp_check_current_price",
+        "description": (
+            "Get live price and intraday snapshot for a ticker. "
+            "Use at market_open to verify price is within the entry zone before placing an order. "
+            "Much faster and cheaper than fmp_ta — returns only: "
+            "symbol, price, open, day_high, day_low, prev_close, change_pct, volume, avg_volume, vol_ratio. "
+            "Do NOT use for research or thesis evaluation — use fmp_ta for that."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "ticker": {"type": "string"},
             },
             "required": ["ticker"],
         },
@@ -475,7 +497,7 @@ def _build_tool_functions() -> dict:
         alpaca_get_account, alpaca_get_positions, alpaca_place_order,
         alpaca_list_orders, alpaca_cancel_order,
     )
-    from scheduler.tools.fmp import fmp_screener, fmp_ohlcv, fmp_news, fmp_earnings_calendar
+    from scheduler.tools.fmp import fmp_screener, fmp_ta, fmp_check_current_price, fmp_news, fmp_earnings_calendar
     from scheduler.tools.serper import serper_search
     from scheduler.tools.pyexec import run_script
     return {
@@ -489,7 +511,8 @@ def _build_tool_functions() -> dict:
         "alpaca_list_orders": alpaca_list_orders,
         "alpaca_cancel_order": alpaca_cancel_order,
         "fmp_screener": fmp_screener,
-        "fmp_ohlcv": fmp_ohlcv,
+        "fmp_ta": fmp_ta,
+        "fmp_check_current_price": fmp_check_current_price,
         "fmp_news": fmp_news,
         "fmp_earnings_calendar": fmp_earnings_calendar,
         "serper_search": serper_search,

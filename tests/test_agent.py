@@ -175,14 +175,14 @@ def test_static_prompt_contains_key_trading_constraints():
     assert "weekly_review" in STATIC_PROMPT
 
 
-def test_tool_schemas_covers_all_15_tools():
+def test_tool_schemas_covers_all_tools():
     from scheduler.agent import TOOL_SCHEMAS
     names = {t["name"] for t in TOOL_SCHEMAS}
     required = {
         "trade_open", "trade_close", "hypothesis_log", "trade_query",
         "alpaca_get_account", "alpaca_get_positions", "alpaca_place_order",
         "alpaca_list_orders", "alpaca_cancel_order",
-        "fmp_screener", "fmp_ohlcv", "fmp_news", "fmp_earnings_calendar",
+        "fmp_screener", "fmp_ta", "fmp_check_current_price", "fmp_news", "fmp_earnings_calendar",
         "serper_search", "run_script", "update_memory_block",
     }
     assert required == names

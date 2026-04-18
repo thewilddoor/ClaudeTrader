@@ -38,12 +38,15 @@ def fmp_screener(
     return response.json()
 
 
-def fmp_ohlcv(ticker: str, limit: int = 5, api_key: Optional[str] = None) -> dict:
+def fmp_ta(ticker: str, limit: int = 5, api_key: Optional[str] = None) -> dict:
     """Get a professional technical analysis payload for a stock ticker.
 
     Internally fetches 260 daily candles from FMP, computes all indicators on
     1D and 1W timeframes, and returns pre-calculated analysis. The `limit`
     parameter controls how many raw OHLCV candles are exposed (default 5).
+
+    Use fmp_check_current_price when you only need the live price (e.g. at
+    market_open to verify entry zone before placing an order).
 
     Args:
         ticker: Stock ticker symbol (e.g. AAPL, MSFT).
@@ -164,6 +167,54 @@ def fmp_ohlcv(ticker: str, limit: int = 5, api_key: Optional[str] = None) -> dic
         }
     except Exception as exc:
         return {"error": str(exc), "symbol": ticker, "raw_ohlcv": raw_5}
+
+
+def fmp_check_current_price(ticker: str, api_key: Optional[str] = None) -> dict:
+    """Get live price and intraday snapshot for a ticker. Lightweight alternative
+    to fmp_ta when only current price is needed (e.g. verifying entry zone at
+    market_open before placing an order).
+
+    Args:
+        ticker: Stock ticker symbol (e.g. AAPL, MSFT).
+        api_key: FMP API key; reads from FMP_API_KEY env var if not provided.
+
+    Returns:
+        dict: {symbol, price, open, day_high, day_low, prev_close,
+               change_pct, volume, avg_volume, vol_ratio}
+    """
+    import os
+    import requests
+
+    api_key = api_key or os.environ["FMP_API_KEY"]
+    params = {"symbol": ticker, "apikey": api_key}
+    response = requests.get(
+        "https://financialmodelingprep.com/stable/quote",
+        params=params,
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    q = data[0] if isinstance(data, list) and data else data
+
+    price = float(q.get("price", 0))
+    prev_close = float(q.get("previousClose", 0))
+    change_pct = round((price - prev_close) / prev_close, 4) if prev_close else None
+    avg_volume = q.get("avgVolume") or 0
+    volume = q.get("volume") or 0
+    vol_ratio = round(volume / avg_volume, 2) if avg_volume else None
+
+    return {
+        "symbol": q.get("symbol", ticker),
+        "price": round(price, 2),
+        "open": round(float(q.get("open", 0)), 2),
+        "day_high": round(float(q.get("dayHigh", 0)), 2),
+        "day_low": round(float(q.get("dayLow", 0)), 2),
+        "prev_close": round(prev_close, 2),
+        "change_pct": change_pct,
+        "volume": int(volume),
+        "avg_volume": int(avg_volume),
+        "vol_ratio": vol_ratio,
+    }
 
 
 def fmp_news(tickers: list, limit: int = 10, api_key: Optional[str] = None) -> list:

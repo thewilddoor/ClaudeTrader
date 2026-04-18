@@ -2,7 +2,7 @@ import json
 import responses
 import pytest
 from datetime import date, timedelta
-from scheduler.tools.fmp import fmp_screener, fmp_ohlcv, fmp_news, fmp_earnings_calendar
+from scheduler.tools.fmp import fmp_screener, fmp_ta, fmp_check_current_price, fmp_news, fmp_earnings_calendar
 
 
 @responses.activate
@@ -46,15 +46,15 @@ def _make_fmp_records(n: int = 260) -> list:
 
 
 @responses.activate
-def test_fmp_ohlcv_returns_enriched_payload():
-    """fmp_ohlcv now returns an enriched TA payload, not raw OHLCV."""
+def test_fmp_ta_returns_enriched_payload():
+    """fmp_ta returns an enriched TA payload across all 14 keys."""
     responses.add(
         responses.GET,
         "https://financialmodelingprep.com/stable/historical-price-eod/full",
         json=_make_fmp_records(260),
         status=200,
     )
-    result = fmp_ohlcv(ticker="AAPL", limit=5, api_key="test")
+    result = fmp_ta(ticker="AAPL", limit=5, api_key="test")
 
     # Top-level structure
     assert "meta" in result
@@ -87,7 +87,7 @@ def test_fmp_ohlcv_returns_enriched_payload():
 
 
 @responses.activate
-def test_fmp_ohlcv_fallback_on_insufficient_data():
+def test_fmp_ta_fallback_on_insufficient_data():
     """Returns error dict when FMP returns fewer than 30 candles."""
     responses.add(
         responses.GET,
@@ -95,10 +95,47 @@ def test_fmp_ohlcv_fallback_on_insufficient_data():
         json=_make_fmp_records(10),
         status=200,
     )
-    result = fmp_ohlcv(ticker="TINY", limit=5, api_key="test")
+    result = fmp_ta(ticker="TINY", limit=5, api_key="test")
     assert "error" in result
     assert result["error"] == "insufficient_data"
     assert "raw_ohlcv" in result  # partial candles still returned for context
+
+
+@responses.activate
+def test_fmp_check_current_price_returns_snapshot():
+    """fmp_check_current_price returns lightweight price snapshot."""
+    responses.add(
+        responses.GET,
+        "https://financialmodelingprep.com/stable/quote",
+        json=[{
+            "symbol": "NVDA",
+            "price": 203.44,
+            "open": 201.22,
+            "dayHigh": 205.88,
+            "dayLow": 200.44,
+            "previousClose": 198.92,
+            "volume": 28400000,
+            "avgVolume": 42000000,
+        }],
+        status=200,
+    )
+    result = fmp_check_current_price(ticker="NVDA", api_key="test")
+
+    assert result["symbol"] == "NVDA"
+    assert result["price"] == 203.44
+    assert result["open"] == 201.22
+    assert result["day_high"] == 205.88
+    assert result["day_low"] == 200.44
+    assert result["prev_close"] == 198.92
+    assert result["volume"] == 28400000
+    assert result["avg_volume"] == 42000000
+    assert result["vol_ratio"] == round(28400000 / 42000000, 2)
+    assert abs(result["change_pct"] - round((203.44 - 198.92) / 198.92, 4)) < 1e-6
+
+    # Must NOT contain any TA fields
+    assert "momentum_1d" not in result
+    assert "alpha101" not in result
+    assert "ics_1d" not in result
 
 
 @responses.activate
