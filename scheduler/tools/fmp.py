@@ -1,7 +1,26 @@
 # scheduler/tools/fmp.py
 """Financial Modeling Prep (FMP) market data tools."""
+import json
+import logging
 from typing import Optional
 from datetime import date, timedelta
+
+log = logging.getLogger(__name__)
+
+
+def _parse_json_lenient(text: str):
+    """Parse JSON from response text, tolerating extra data after the first value.
+
+    FMP occasionally returns a response with trailing content (e.g. a newline
+    followed by a second JSON object). Python's json.loads() rejects this with
+    'Extra data'. Using JSONDecoder.raw_decode() accepts the first complete JSON
+    value and ignores the rest.
+    """
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError:
+        result, _ = json.JSONDecoder().raw_decode(text.strip())
+        return result
 
 
 def _get_today() -> date:
@@ -50,7 +69,7 @@ def _fetch_pead_candidates(
             timeout=30,
         )
         resp.raise_for_status()
-        data = resp.json()
+        data = _parse_json_lenient(resp.text)
         if isinstance(data, list):
             raw_surprises.extend(data)
 
@@ -91,7 +110,7 @@ def _fetch_pead_candidates(
         timeout=30,
     )
     resp.raise_for_status()
-    raw_quotes = resp.json()
+    raw_quotes = _parse_json_lenient(resp.text)
     quote_map: dict = {}
     if isinstance(raw_quotes, list):
         quote_map = {q["symbol"]: q for q in raw_quotes}
@@ -218,19 +237,24 @@ def fmp_screener(
         timeout=30,
     )
     response.raise_for_status()
-    results = [{**r, "pead_candidate": False} for r in response.json()]
+    raw = _parse_json_lenient(response.text)
+    results = [{**r, "pead_candidate": False} for r in raw] if isinstance(raw, list) else []
 
     if not pead:
         return results
 
-    pead_candidates = _fetch_pead_candidates(
-        api_key=api_key,
-        market_cap_more_than=market_cap_more_than,
-        volume_more_than=volume_more_than,
-        sector=sector,
-        pead_min_surprise_pct=pead_min_surprise_pct,
-        pead_lookback_days=pead_lookback_days,
-    )
+    try:
+        pead_candidates = _fetch_pead_candidates(
+            api_key=api_key,
+            market_cap_more_than=market_cap_more_than,
+            volume_more_than=volume_more_than,
+            sector=sector,
+            pead_min_surprise_pct=pead_min_surprise_pct,
+            pead_lookback_days=pead_lookback_days,
+        )
+    except Exception as exc:
+        log.warning("PEAD fetch failed (returning screener results only): %s", exc)
+        pead_candidates = []
 
     if pead_candidates:
         pead_symbols = {p["symbol"] for p in pead_candidates}
