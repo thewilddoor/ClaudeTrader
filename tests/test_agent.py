@@ -164,15 +164,54 @@ def test_build_system_prompt_cache_control_placement(mem_db):
     assert "obs" in system[1]["text"]
 
 
-def test_static_prompt_contains_key_trading_constraints():
-    from scheduler.agent import STATIC_PROMPT
-    assert "trade_open" in STATIC_PROMPT
-    assert "BEFORE" in STATIC_PROMPT or "before" in STATIC_PROMPT  # trade_open before place_order
-    assert "proposed_change" in STATIC_PROMPT
-    assert "filter_sql" in STATIC_PROMPT
-    assert "context_json" in STATIC_PROMPT
-    assert "eod_reflection" in STATIC_PROMPT
-    assert "weekly_review" in STATIC_PROMPT
+def test_operations_manual_contains_key_trading_constraints():
+    from scheduler.agent import OPERATIONS_MANUAL
+    assert "trade_open" in OPERATIONS_MANUAL
+    assert "BEFORE" in OPERATIONS_MANUAL or "before" in OPERATIONS_MANUAL  # trade_open before place_order
+    assert "proposed_change" in OPERATIONS_MANUAL
+    assert "filter_sql" in OPERATIONS_MANUAL
+    assert "context_json" in OPERATIONS_MANUAL
+    assert "eod_reflection" in OPERATIONS_MANUAL
+    assert "weekly_review" in OPERATIONS_MANUAL
+
+
+def test_operations_manual_does_not_contain_evolvable_strategy():
+    from scheduler.agent import OPERATIONS_MANUAL
+    assert "Starting equity: $50,000" not in OPERATIONS_MANUAL
+    assert "Max open positions: 5" not in OPERATIONS_MANUAL
+    assert "bull_quiet" not in OPERATIONS_MANUAL
+    assert "bear_volatile" not in OPERATIONS_MANUAL
+    assert "Max single position size: 15%" not in OPERATIONS_MANUAL
+
+
+def test_strategy_doc_initial_contains_evolvable_content():
+    from scheduler.agent import STRATEGY_DOC_INITIAL
+    assert "50,000" in STRATEGY_DOC_INITIAL
+    assert "bull_quiet" in STRATEGY_DOC_INITIAL
+    assert "bear_volatile" in STRATEGY_DOC_INITIAL
+    assert "Max open positions" in STRATEGY_DOC_INITIAL
+
+
+def test_operations_manual_contains_required_mechanics():
+    from scheduler.agent import OPERATIONS_MANUAL
+    assert "trade_open" in OPERATIONS_MANUAL
+    assert "proposed_change" in OPERATIONS_MANUAL
+    assert "filter_sql" in OPERATIONS_MANUAL
+    assert "context_json" in OPERATIONS_MANUAL
+    assert "eod_reflection" in OPERATIONS_MANUAL
+    assert "weekly_review" in OPERATIONS_MANUAL
+    assert "BEFORE" in OPERATIONS_MANUAL or "before" in OPERATIONS_MANUAL
+
+
+def test_build_system_prompt_uses_operations_manual():
+    from scheduler.agent import build_system_prompt, OPERATIONS_MANUAL
+    blocks = {
+        "strategy_doc": "evolved strategy", "watchlist": "wl",
+        "performance_snapshot": "{}", "today_context": "ctx", "observations": "obs"
+    }
+    system = build_system_prompt(blocks)
+    assert system[0]["text"] == OPERATIONS_MANUAL
+    assert "evolved strategy" in system[1]["text"]
 
 
 def test_tool_schemas_covers_all_tools():
