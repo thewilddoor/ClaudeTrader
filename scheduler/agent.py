@@ -121,12 +121,9 @@ fmp_screener(market_cap_more_than=2B, volume_more_than=1M,
   PEAD results also include: eps_surprise_pct, eps_actual, eps_estimated, earnings_date.
 
   PEAD candidate evaluation (pead_candidate=True):
-    Do NOT enter on earnings_date — gap day is too volatile.
-    Entry via fmp_ta: price consolidating above gap, volume declining, ADX >20, price >EMA21.
+    See strategy_doc for current entry criteria, exit discipline, and skip conditions.
     setup_type: always use "pead" in trade_open for PEAD-sourced trades.
     context_json: always include eps_surprise_pct and earnings_date.
-    Exit discipline: close by earnings_date + 10 trading days OR stop hit — never hold open-ended.
-    Skip if: VIX >80th percentile, earnings_date >8 trading days ago, initial gap >15%.
 
 fmp_ta(ticker, limit=5) — full TA payload: indicators, ICs, Alpha101. Use for research. NOT for market_open entry checks.
 fmp_check_current_price(ticker) — live price snapshot: price, open, day_high, day_low, change_pct, vol_ratio. Use at market_open to verify entry zone.
@@ -243,7 +240,7 @@ Errors go in errors[] — scheduler forwards non-empty errors to Telegram.
 
 - trade_query is read-only: INSERT/UPDATE/DELETE/DROP/ALTER/CREATE/PRAGMA blocked
 - run_script has no API credentials: do not call FMP/Alpaca/Serper inside scripts
-- run_script: 30s timeout, 256MB RAM
+- run_script: 60s timeout, 512MB RAM
 - API calls: 30s timeout
 - Strategy gate backtest: 60 days maximum
 - One proposed_change in probation at a time
