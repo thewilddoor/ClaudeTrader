@@ -101,7 +101,7 @@ class MemoryStore:
             conn.close()
 
     def get_recent_digests(self, n: int = 2) -> list:
-        """Retrieve recent session digests that are not null.
+        """Retrieve the n most recent session digests that are not null.
 
         Args:
             n: Maximum number of digests to return.
@@ -114,9 +114,9 @@ class MemoryStore:
         try:
             rows = conn.execute(
                 "SELECT session_name, date, digest FROM session_log "
-                "WHERE digest IS NOT NULL ORDER BY logged_at ASC LIMIT ?",
+                "WHERE digest IS NOT NULL ORDER BY logged_at DESC, id DESC LIMIT ?",
                 (n,),
             ).fetchall()
-            return [dict(row) for row in rows]
+            return list(reversed([dict(row) for row in rows]))
         finally:
             conn.close()

@@ -78,3 +78,20 @@ def test_get_recent_digests_skips_null_digests(mem_db):
     digests = mem_db.get_recent_digests(n=5)
     assert len(digests) == 1
     assert digests[0]["digest"] == "only digest"
+
+
+def test_get_recent_digests_returns_newest_n_not_oldest(mem_db):
+    """With 3 logged digests and n=2, should return the 2 most recent in chronological order."""
+    id1 = mem_db.log_session("pre_market", "2026-04-14", "r1")
+    mem_db.update_session_digest(id1, "oldest digest")
+    id2 = mem_db.log_session("market_open", "2026-04-15", "r2")
+    mem_db.update_session_digest(id2, "middle digest")
+    id3 = mem_db.log_session("eod_reflection", "2026-04-16", "r3")
+    mem_db.update_session_digest(id3, "newest digest")
+
+    digests = mem_db.get_recent_digests(n=2)
+
+    assert len(digests) == 2
+    assert digests[0]["digest"] == "middle digest"
+    assert digests[1]["digest"] == "newest digest"
+    assert all(d["digest"] != "oldest digest" for d in digests)
