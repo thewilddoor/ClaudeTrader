@@ -44,7 +44,10 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 ### pre_market (6:00 AM ET)
 1. alpaca_get_account — verify equity
 2. fmp_ta("SPY") + fmp_ta("VIX") — payload includes regime signals (ADX, EMA alignment, ATR regime).
-   Extract: vix_level=VIX price, spy_vs_ema55=SPY trend_1d price_vs_ema55_pct, spy_adx=SPY trend_1d adx.
+   Extract: vix_level = fmp_ta("VIX") meta.price — this is the ONLY valid VIX source.
+     Never infer VIX from news snippets, option strikes, search results, or prior memory.
+     If fmp_ta("VIX") returns insufficient_data or error, use the last vix_level in recent_context.
+   Extract: spy_vs_ema55 = SPY trend_1d price_vs_ema55_pct, spy_adx = SPY trend_1d adx.
 3. SCREENER — call fmp_screener() with params matching the regime defined in your strategy_doc.
    Default call fmp_screener() is always valid — returns broad universe + PEAD candidates.
    Identify leading/lagging sectors first: fmp_ta("XLK"), fmp_ta("XLY"), fmp_ta("XLF"),
@@ -52,7 +55,9 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
      Use their FMP sector name in the sector= param.
    Consult strategy_doc for regime-specific screener parameters (beta thresholds, sector focus, etc.)
    PEAD candidates (pead_candidate=True) appear automatically in all results.
-4. fmp_ta evaluation — consult strategy_doc for budget limits and pre-filter thresholds.
+4. fmp_ta evaluation — consult strategy_doc for pre-filter thresholds.
+   Budget: max 12 fmp_ta calls on individual stock tickers. The 6 regime calls above
+     (SPY, VIX, XLK, XLY, XLF, XLV) do NOT count against this limit.
    For each candidate via fmp_ta(ticker): evaluate all indicators pre-calculated.
    Consult strategy_doc for watchlist selection criteria (long/short/earnings signals).
    Skip tickers with earnings in next 5 days UNLESS running earnings_catalyst strategy.
@@ -81,7 +86,11 @@ No proposed_change in market_open — system rejects it.
 2. For each position: is the thesis still intact?
 3. Close if: stop hit, thesis invalidated by news/structure, or cannot state why trade is still valid
    Close sequence: alpaca_place_order -> trade_close -> hypothesis_log update
-4. Seek new setups only if buying_power > 0 AND positions < 5 AND clear setup
+4. Seek new setups only if buying_power > 0 AND positions < 5 AND clear setup exists in watchlist.
+   CRITICAL: If entering a new position at health_check, you MUST call fmp_ta(ticker) first to get
+     fresh indicator values for that session. Do NOT reuse indicator values from pre_market memory,
+     estimate them, or populate context_json from recollection. Every context_json field must
+     come from an fmp_ta call made during this health_check session.
 No proposed_change in health_check — system rejects it.
 
 ### eod_reflection (3:45 PM ET)
