@@ -55,7 +55,7 @@ def build_pre_market_prompt(date: str, market_opens_in: str, recent_context: str
         f"SESSION: pre_market | DATE: {date} | MARKET_OPENS_IN: {market_opens_in}\n\n"
         f"{recent_context}\n\n"
         f"Begin pre_market session. Screen for today's opportunities, determine regime, "
-        f"build watchlist. Respond with valid JSON only — begin with {{ and end with }}."
+        f"build watchlist. Output ONLY the JSON object — no explanation, no preamble, no trailing text. Begin with {{ and end with }}."
     )
 
 
@@ -65,7 +65,7 @@ def build_market_open_prompt(date: str, time_et: str, recent_context: str) -> st
         f"{recent_context}\n\n"
         f"Market just opened. Execute planned trades from today_context and watchlist "
         f"where conditions are met. Remember: trade_open BEFORE alpaca_place_order. "
-        f"No proposed_change in this session. Respond with valid JSON only — begin with {{ and end with }}."
+        f"No proposed_change in this session. Output ONLY the JSON object — no explanation, no preamble, no trailing text. Begin with {{ and end with }}."
     )
 
 
@@ -75,7 +75,7 @@ def build_health_check_prompt(date: str, recent_context: str) -> str:
         f"{recent_context}\n\n"
         f"Midday check. Review each open position against its original thesis. "
         f"Close positions where thesis is invalidated or stop has been hit. "
-        f"No proposed_change in health_check — system rejects it. Respond with valid JSON only — begin with {{ and end with }}."
+        f"No proposed_change in health_check — system rejects it. Output ONLY the JSON object — no explanation, no preamble, no trailing text. Begin with {{ and end with }}."
     )
 
 
@@ -97,7 +97,7 @@ def build_eod_reflection_prompt(
         f"End of day. Close remaining positions (unless overnight hold explicitly justified "
         f"in today_context). Refresh performance_snapshot from trade_query. Write observations. "
         f"Propose strategy changes via proposed_change if patterns across >=3 trades justify it. "
-        f"Respond with valid JSON only — begin with {{ and end with }}. Include performance_update and proposed_change (or null)."
+        f"Output ONLY the JSON object — no explanation, no preamble, no trailing text. Begin with {{ and end with }}. Include performance_update and proposed_change (or null)."
     )
 
 
@@ -117,5 +117,5 @@ def build_weekly_review_prompt(
         f"Weekly deep review. Mine trade data for patterns by setup_type, regime, VIX range, "
         f"and hypothesis. Confirm or reject hypotheses with sufficient data (>=10 trades). "
         f"Compress observations and watchlist. Update performance_snapshot. "
-        f"Propose strategy changes if major patterns found. Respond with valid JSON only — begin with {{ and end with }}."
+        f"Propose strategy changes if major patterns found. Output ONLY the JSON object — no explanation, no preamble, no trailing text. Begin with {{ and end with }}."
     )

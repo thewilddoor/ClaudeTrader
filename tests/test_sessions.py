@@ -92,3 +92,38 @@ def test_build_recent_context_shows_none_when_no_positions():
         strategy_version="v1", strategy_status="confirmed", last_digests=[],
     )
     assert "None" in result
+
+
+def test_pre_market_prompt_enforces_json_only():
+    ctx = "## Recent Context\n**Strategy Version:** v1 (confirmed)"
+    result = build_pre_market_prompt("2026-04-18", "3h30m", ctx)
+    assert "Output ONLY the JSON object" in result
+    assert "no preamble" in result
+
+
+def test_market_open_prompt_enforces_json_only():
+    ctx = "## Recent Context\n**Live Positions:** 0 open"
+    result = build_market_open_prompt("2026-04-18", "09:30", ctx)
+    assert "Output ONLY the JSON object" in result
+    assert "no preamble" in result
+
+
+def test_health_check_prompt_enforces_json_only():
+    ctx = "## Recent Context\n**Live Positions:** 1 open"
+    result = build_health_check_prompt("2026-04-18", ctx)
+    assert "Output ONLY the JSON object" in result
+    assert "no preamble" in result
+
+
+def test_eod_reflection_prompt_enforces_json_only():
+    ctx = "## Recent Context"
+    result = build_eod_reflection_prompt("2026-04-18", [], ctx)
+    assert "Output ONLY the JSON object" in result
+    assert "no preamble" in result
+
+
+def test_weekly_review_prompt_enforces_json_only():
+    ctx = "## Recent Context"
+    result = build_weekly_review_prompt("2026-04-18", 16, ctx)
+    assert "Output ONLY the JSON object" in result
+    assert "no preamble" in result
