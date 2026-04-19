@@ -16,7 +16,7 @@ def fresh_env(tmp_path, monkeypatch):
 
 
 def test_bootstrap_seeds_v1_row_in_strategy_versions(fresh_env, monkeypatch):
-    from scheduler.agent import STATIC_PROMPT
+    from scheduler.agent import STRATEGY_DOC_INITIAL
 
     monkeypatch.setattr(sqlite_mod, "DB_PATH", fresh_env["db_path"])
 
@@ -30,6 +30,6 @@ def test_bootstrap_seeds_v1_row_in_strategy_versions(fresh_env, monkeypatch):
 
     assert row is not None
     assert row["status"] == "confirmed"
-    assert STATIC_PROMPT in row["doc_text"]
+    assert STRATEGY_DOC_INITIAL in row["doc_text"]
     assert "## Version metadata" in row["doc_text"]
     assert "version: v1" in row["doc_text"]

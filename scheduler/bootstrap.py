@@ -11,12 +11,12 @@ from scheduler.tools.sqlite import (
     bootstrap_memory_table,
     _connect as _db_connect,
 )
-from scheduler.agent import STATIC_PROMPT
+from scheduler.agent import STRATEGY_DOC_INITIAL
 
 AGENT_ID_FILE = Path("/app/state/.agent_id")
 
 _INITIAL_MEMORY = {
-    "strategy_doc": STATIC_PROMPT,
+    "strategy_doc": STRATEGY_DOC_INITIAL,
     "watchlist": "# Watchlist\nEmpty on bootstrap — populated during pre_market sessions.\n",
     "performance_snapshot": (
         '{"trades_total": 0, "win_rate_10": null, "win_rate_20": null, '
@@ -46,7 +46,7 @@ def bootstrap():
         "baseline_win_rate: null\n"
         "baseline_avg_r: null\n\n"
     )
-    _v1_doc_text = _v1_metadata + STATIC_PROMPT
+    _v1_doc_text = _v1_metadata + STRATEGY_DOC_INITIAL
     db_conn = _db_connect()
     try:
         if db_conn.execute("SELECT version FROM strategy_versions WHERE version='v1'").fetchone() is None:
