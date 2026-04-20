@@ -194,12 +194,15 @@ def _check_daily_halt() -> bool:
         conn.execute("PRAGMA journal_mode=WAL")
         conn.execute("PRAGMA busy_timeout=5000")
         conn.row_factory = _sqlite3.Row
-        row = conn.execute(
-            "SELECT SUM(outcome_pnl) as sum_pnl FROM trades "
-            "WHERE date(closed_at) = date('now') AND closed_at IS NOT NULL"
-        ).fetchone()
-        conn.close()
-        sum_pnl = float(row["sum_pnl"]) if row and row["sum_pnl"] is not None else 0.0
+        try:
+            row = conn.execute(
+                "SELECT SUM(outcome_pnl) as sum_pnl FROM trades "
+                "WHERE date(closed_at) = date('now') AND closed_at IS NOT NULL"
+            ).fetchone()
+            sum_pnl = float(row["sum_pnl"]) if row and row["sum_pnl"] is not None else 0.0
+        finally:
+            conn.close()
+
         if sum_pnl >= 0:
             return False  # profitable or flat — no halt
 
