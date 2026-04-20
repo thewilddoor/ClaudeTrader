@@ -217,6 +217,55 @@ def trade_open(
         conn.close()
 
 
+def trade_update_fill(
+    trade_id: int,
+    filled_avg_price: float,
+    alpaca_order_id: str,
+) -> dict:
+    """Update entry_price and alpaca_order_id with actual fill data from Alpaca.
+
+    Call this once after alpaca_list_orders confirms the entry order filled.
+    Must be called before trade_close — entry_price is used for server-side P&L.
+
+    Args:
+        trade_id: ID returned by trade_open.
+        filled_avg_price: Actual fill price from Alpaca (filled_avg_price field).
+        alpaca_order_id: Alpaca order ID for the entry order.
+
+    Returns:
+        dict: {'status': 'ok', 'trade_id': int, 'entry_price': float}
+    """
+    import sqlite3
+    from pathlib import Path
+
+    db_path = DB_PATH
+    if not Path(db_path).exists():
+        raise RuntimeError("trades.db not found — run bootstrap first")
+
+    conn = sqlite3.connect(db_path)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA busy_timeout=5000")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.row_factory = sqlite3.Row
+
+    try:
+        row = conn.execute(
+            "SELECT id, closed_at FROM trades WHERE id = ?", (trade_id,)
+        ).fetchone()
+        if row is None:
+            raise ValueError(f"trade_id {trade_id} not found")
+        if row["closed_at"] is not None:
+            raise ValueError(f"trade_id {trade_id} already closed — cannot update fill")
+        conn.execute(
+            "UPDATE trades SET entry_price = ?, alpaca_order_id = ? WHERE id = ?",
+            (filled_avg_price, alpaca_order_id, trade_id),
+        )
+        conn.commit()
+        return {"status": "ok", "trade_id": trade_id, "entry_price": filled_avg_price}
+    finally:
+        conn.close()
+
+
 def trade_close(
     trade_id: int,
     exit_price: float,

@@ -367,3 +367,53 @@ def test_schema_has_alpaca_order_id_and_stop_order_id(db):
     conn.close()
     assert "alpaca_order_id" in cols
     assert "stop_order_id" in cols
+
+
+def _open_trade(db: str, ticker="NVDA", entry_price=100.0, size=10.0) -> int:
+    """Helper: insert a minimal open trade row, return trade_id."""
+    import sqlite3 as _sqlite3
+    conn = _sqlite3.connect(db)
+    conn.execute("PRAGMA journal_mode=WAL")
+    cursor = conn.execute(
+        "INSERT INTO trades (ticker, side, entry_price, size, setup_type, "
+        "hypothesis_id, rationale, vix_at_entry, regime) "
+        "VALUES (?, 'buy', ?, ?, 'momentum', 'H001', 'test', 15.0, 'bull_low_vol')",
+        (ticker, entry_price, size),
+    )
+    conn.commit()
+    trade_id = cursor.lastrowid
+    conn.close()
+    return trade_id
+
+
+def test_trade_update_fill_writes_price_and_order_id(db):
+    from scheduler.tools.sqlite import trade_update_fill
+    trade_id = _open_trade(str(db))
+    result = trade_update_fill(trade_id, 102.50, "alpaca-order-abc123")
+    assert result == {"status": "ok", "trade_id": trade_id, "entry_price": 102.50}
+    conn = sqlite3.connect(str(db))
+    row = conn.execute("SELECT entry_price, alpaca_order_id FROM trades WHERE id = ?", (trade_id,)).fetchone()
+    conn.close()
+    assert row[0] == 102.50
+    assert row[1] == "alpaca-order-abc123"
+
+
+def test_trade_update_fill_rejects_unknown_trade(db):
+    from scheduler.tools.sqlite import trade_update_fill
+    with pytest.raises(ValueError, match="not found"):
+        trade_update_fill(999, 100.0, "order-xyz")
+
+
+def test_trade_update_fill_rejects_already_closed_trade(db):
+    from scheduler.tools.sqlite import trade_update_fill
+    trade_id = _open_trade(str(db))
+    conn = sqlite3.connect(str(db))
+    conn.execute(
+        "UPDATE trades SET closed_at = datetime('now'), exit_price = 105.0, "
+        "exit_reason = 'hit_target', outcome_pnl = 50.0, r_multiple = 1.0 WHERE id = ?",
+        (trade_id,),
+    )
+    conn.commit()
+    conn.close()
+    with pytest.raises(ValueError, match="already closed"):
+        trade_update_fill(trade_id, 102.0, "order-abc")
