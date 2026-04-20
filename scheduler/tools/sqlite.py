@@ -41,7 +41,7 @@ CREATE TABLE IF NOT EXISTS trades (
     strategy_version TEXT,
     context_json  TEXT,
     alpaca_order_id TEXT,
-    stop_order_id   TEXT,
+    stop_order_id   TEXT,  -- reserved for future persistence; canonical source is today_context memory block
     opened_at     TEXT    NOT NULL DEFAULT (datetime('now')),
     closed_at     TEXT
 );
