@@ -55,7 +55,7 @@ def test_run_session_returns_text_on_end_turn(mem_db):
     from scheduler.agent import AgentCore
     agent = AgentCore(
         db_path=mem_db.db_path,
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         api_key="test",
         _client=mock_client,
         _digester=mock_digester,
@@ -77,7 +77,7 @@ def test_run_session_executes_tool_and_continues(mem_db):
     from scheduler.agent import AgentCore, _execute_tool
     agent = AgentCore(
         db_path=mem_db.db_path,
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         api_key="test",
         _client=mock_client,
         _digester=mock_digester,
@@ -101,7 +101,7 @@ def test_run_session_logs_response_and_triggers_digest(mem_db):
     from scheduler.agent import AgentCore
     agent = AgentCore(
         db_path=mem_db.db_path,
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         api_key="test",
         _client=mock_client,
         _digester=mock_digester,
@@ -121,7 +121,7 @@ def test_update_memory_block_writes_to_store(mem_db):
     from scheduler.agent import AgentCore
     agent = AgentCore(
         db_path=mem_db.db_path,
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         api_key="test",
         _client=mock_client,
         _digester=mock_digester,
@@ -138,7 +138,7 @@ def test_get_memory_block_reads_from_store(mem_db):
     from scheduler.agent import AgentCore
     agent = AgentCore(
         db_path=mem_db.db_path,
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         api_key="test",
         _client=mock_client,
         _digester=mock_digester,
@@ -249,7 +249,7 @@ def test_run_session_update_memory_block_tool_writes_to_store(mem_db):
     from scheduler.agent import AgentCore
     agent = AgentCore(
         db_path=mem_db.db_path,
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         api_key="test",
         _client=mock_client,
         _digester=mock_digester,
@@ -277,7 +277,7 @@ def test_run_session_update_memory_block_rejects_strategy_doc(mem_db):
     from scheduler.agent import AgentCore
     agent = AgentCore(
         db_path=mem_db.db_path,
-        model="claude-haiku-4-5-20251001",
+        model="claude-haiku-4-5",
         api_key="test",
         _client=mock_client,
         _digester=mock_digester,
