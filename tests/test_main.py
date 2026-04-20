@@ -79,3 +79,99 @@ def test_read_and_clear_returns_none_when_file_missing(tmp_path, monkeypatch):
     monkeypatch.setattr("scheduler.main.PENDING_FEEDBACK_PATH", tmp_path / "no_such_file.txt")
     from scheduler.main import _read_and_clear_pending_feedback
     assert _read_and_clear_pending_feedback() is None
+
+
+import sqlite3 as _sqlite3
+from unittest.mock import patch, MagicMock
+
+
+def _make_db_with_pnl(tmp_path, pnl_values: list) -> str:
+    """Create a temp trades.db with today's closed trades."""
+    db = str(tmp_path / "trades.db")
+    conn = _sqlite3.connect(db)
+    conn.execute("""
+        CREATE TABLE trades (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            ticker TEXT, side TEXT, entry_price REAL, size REAL,
+            setup_type TEXT, hypothesis_id TEXT, rationale TEXT,
+            vix_at_entry REAL, regime TEXT,
+            outcome_pnl REAL, closed_at TEXT
+        )
+    """)
+    for pnl in pnl_values:
+        conn.execute(
+            "INSERT INTO trades (ticker, side, entry_price, size, setup_type, "
+            "hypothesis_id, rationale, vix_at_entry, regime, outcome_pnl, closed_at) "
+            "VALUES ('AAPL','buy',100,10,'momentum','H1','t',15,'bull',?,datetime('now'))",
+            (pnl,),
+        )
+    conn.commit()
+    conn.close()
+    return db
+
+
+def _mock_alpaca_equity(equity: float) -> MagicMock:
+    resp = MagicMock()
+    resp.status_code = 200
+    resp.json.return_value = {"equity": str(equity)}
+    return resp
+
+
+def test_check_daily_halt_fires_at_minus_3_percent(tmp_path):
+    db = _make_db_with_pnl(tmp_path, [-1500.0])  # -1500 / 50000 = -3%
+    with patch("scheduler.main.DB_PATH", db), \
+         patch("requests.get", return_value=_mock_alpaca_equity(50000.0)):
+        from scheduler.main import _check_daily_halt
+        assert _check_daily_halt() is True
+
+
+def test_check_daily_halt_does_not_fire_below_threshold(tmp_path):
+    db = _make_db_with_pnl(tmp_path, [-1000.0])  # -1000 / 50000 = -2% — under threshold
+    with patch("scheduler.main.DB_PATH", db), \
+         patch("requests.get", return_value=_mock_alpaca_equity(50000.0)):
+        from scheduler.main import _check_daily_halt
+        assert _check_daily_halt() is False
+
+
+def test_check_daily_halt_returns_false_with_no_trades(tmp_path):
+    db = _make_db_with_pnl(tmp_path, [])
+    with patch("scheduler.main.DB_PATH", db), \
+         patch("requests.get", return_value=_mock_alpaca_equity(50000.0)):
+        from scheduler.main import _check_daily_halt
+        assert _check_daily_halt() is False
+
+
+def test_check_daily_halt_returns_false_on_alpaca_error(tmp_path):
+    db = _make_db_with_pnl(tmp_path, [-2000.0])
+    error_resp = MagicMock()
+    error_resp.status_code = 500
+    with patch("scheduler.main.DB_PATH", db), \
+         patch("requests.get", return_value=error_resp):
+        from scheduler.main import _check_daily_halt
+        assert _check_daily_halt() is False
+
+
+def test_job_market_open_skips_when_halted(tmp_path):
+    db = _make_db_with_pnl(tmp_path, [-1500.0])
+    with patch("scheduler.main.DB_PATH", db), \
+         patch("requests.get", return_value=_mock_alpaca_equity(50000.0)), \
+         patch("scheduler.main.run_session") as mock_run, \
+         patch("scheduler.main.send_telegram") as mock_telegram:
+        from scheduler.main import job_market_open
+        job_market_open()
+    mock_run.assert_not_called()
+    mock_telegram.assert_called_once()
+    assert "HALT" in mock_telegram.call_args[0][0].upper()
+
+
+def test_job_health_check_skips_when_halted(tmp_path):
+    db = _make_db_with_pnl(tmp_path, [-1500.0])
+    with patch("scheduler.main.DB_PATH", db), \
+         patch("requests.get", return_value=_mock_alpaca_equity(50000.0)), \
+         patch("scheduler.main.run_session") as mock_run, \
+         patch("scheduler.main.send_telegram") as mock_telegram:
+        from scheduler.main import job_health_check
+        job_health_check()
+    mock_run.assert_not_called()
+    mock_telegram.assert_called_once()
+    assert "HALT" in mock_telegram.call_args[0][0].upper()

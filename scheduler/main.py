@@ -179,6 +179,49 @@ def _build_recent_context_str() -> str:
     )
 
 
+def _check_daily_halt() -> bool:
+    """Return True if today's realized P&L has breached the -3% daily loss limit.
+
+    Queries SQLite for today's closed trades, fetches current equity from Alpaca,
+    and returns True only if sum_pnl / equity < -0.03. Fails open (returns False)
+    on any error — a connectivity problem must not lock out all sessions.
+    """
+    import sqlite3 as _sqlite3
+    import requests
+
+    try:
+        conn = _sqlite3.connect(DB_PATH)
+        conn.execute("PRAGMA journal_mode=WAL")
+        conn.execute("PRAGMA busy_timeout=5000")
+        conn.row_factory = _sqlite3.Row
+        row = conn.execute(
+            "SELECT SUM(outcome_pnl) as sum_pnl FROM trades "
+            "WHERE date(closed_at) = date('now') AND closed_at IS NOT NULL"
+        ).fetchone()
+        conn.close()
+        sum_pnl = float(row["sum_pnl"]) if row and row["sum_pnl"] is not None else 0.0
+        if sum_pnl >= 0:
+            return False  # profitable or flat — no halt
+
+        resp = requests.get(
+            f"{os.environ['ALPACA_BASE_URL']}/v2/account",
+            headers={
+                "APCA-API-KEY-ID": os.environ["ALPACA_API_KEY"],
+                "APCA-API-SECRET-KEY": os.environ["ALPACA_SECRET_KEY"],
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            return False
+        equity = float(resp.json()["equity"])
+        if equity <= 0:
+            return False
+        return (sum_pnl / equity) <= -0.03
+    except Exception as exc:
+        log.warning(f"_check_daily_halt failed ({exc}) — failing open")
+        return False
+
+
 def run_session(session_type: str, prompt: str, max_retries: int = 1):
     """Dispatch a session to the Letta agent with error handling and Telegram notifications."""
     is_strategy_session = session_type in ("eod_reflection", "weekly_review")
@@ -296,6 +339,10 @@ def job_pre_market():
 
 
 def job_market_open():
+    if _check_daily_halt():
+        log.warning("Daily halt active — skipping market_open session")
+        send_telegram("DAILY HALT: -3% loss threshold reached. market_open skipped.")
+        return
     now = datetime.now(ET)
     recent_context = _build_recent_context_str()
     prompt = build_market_open_prompt(
@@ -307,6 +354,10 @@ def job_market_open():
 
 
 def job_health_check():
+    if _check_daily_halt():
+        log.warning("Daily halt active — skipping health_check session")
+        send_telegram("DAILY HALT: -3% loss threshold reached. health_check skipped.")
+        return
     now = datetime.now(ET)
     recent_context = _build_recent_context_str()
     prompt = build_health_check_prompt(
