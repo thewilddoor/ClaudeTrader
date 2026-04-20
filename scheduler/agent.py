@@ -101,7 +101,9 @@ No proposed_change in health_check — system rejects it.
 
 ### Manual Close Protocol (health_check and EOD)
 Before closing any position manually:
-1. Retrieve stop_order_id for this trade from today_context
+1. Retrieve stop_order_id for this trade from today_context.
+   If stop_order_id is absent (trade opened before broker-stop feature, or stop placement failed),
+   skip step 2 and proceed directly to step 3.
 2. alpaca_cancel_order(stop_order_id) — cancel the standing GTC stop
    If this returns an error, the stop already filled intraday. Treat this as:
    "stop was hit — record trade_close using stop_loss price as exit_price, exit_reason='stop_hit'"
