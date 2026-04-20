@@ -270,23 +270,25 @@ def trade_close(
     trade_id: int,
     exit_price: float,
     exit_reason: str,
-    outcome_pnl: float,
-    r_multiple: float,
+    outcome_pnl: Optional[float] = None,
+    r_multiple: Optional[float] = None,
 ) -> dict:
-    """Stamp exit fields onto an open trade.
+    """Stamp exit fields onto an open trade. P&L is computed server-side from stored fields.
 
-    Claude cannot modify entry fields — only the five exit columns are written.
-    closed_at is set automatically by the tool.
+    outcome_pnl and r_multiple are optional overrides — if provided, they are stored
+    as-is. If omitted, the tool computes them from entry_price, exit_price, stop_loss,
+    size, and side. Use the override only when the fill price is unusual (e.g. gap open).
 
     Args:
         trade_id: ID returned by trade_open when the position was opened.
         exit_price: Fill price at exit.
-        exit_reason: Why the trade was closed (e.g. 'hit_target', 'stop_hit', 'manual').
-        outcome_pnl: Realised P&L in dollars (negative for a loss).
-        r_multiple: Outcome expressed as a multiple of initial risk (1R = risked amount).
+        exit_reason: Why the trade was closed. One of: hit_target, stop_hit,
+            thesis_invalidated, time_exit, manual, order_failed.
+        outcome_pnl: Optional override for realised P&L in dollars.
+        r_multiple: Optional override for outcome as a multiple of initial risk.
 
     Returns:
-        dict: {'trade_id': int, 'closed_at': str}
+        dict: {'trade_id': int, 'closed_at': str, 'outcome_pnl': float, 'r_multiple': float}
     """
     import sqlite3
     from pathlib import Path
@@ -302,11 +304,28 @@ def trade_close(
     conn.row_factory = sqlite3.Row
 
     try:
-        row = conn.execute("SELECT id, closed_at FROM trades WHERE id = ?", (trade_id,)).fetchone()
+        row = conn.execute(
+            "SELECT id, closed_at, entry_price, stop_loss, size, side "
+            "FROM trades WHERE id = ?",
+            (trade_id,),
+        ).fetchone()
         if row is None:
             raise ValueError(f"trade_id {trade_id} not found")
         if row["closed_at"] is not None:
             raise ValueError(f"trade_id {trade_id} already closed at {row['closed_at']}")
+
+        # Compute P&L server-side if not provided as override
+        if outcome_pnl is None:
+            if row["side"] == "buy":
+                outcome_pnl = (exit_price - row["entry_price"]) * row["size"]
+            else:
+                outcome_pnl = (row["entry_price"] - exit_price) * row["size"]
+
+        if r_multiple is None:
+            stop = row["stop_loss"]
+            risk = abs(row["entry_price"] - stop) * row["size"] if stop is not None else 0.0
+            r_multiple = outcome_pnl / risk if risk > 0 else 0.0
+
         conn.execute(
             """
             UPDATE trades
@@ -323,7 +342,12 @@ def trade_close(
         closed_at = conn.execute(
             "SELECT closed_at FROM trades WHERE id = ?", (trade_id,)
         ).fetchone()["closed_at"]
-        return {"trade_id": trade_id, "closed_at": closed_at}
+        return {
+            "trade_id": trade_id,
+            "closed_at": closed_at,
+            "outcome_pnl": outcome_pnl,
+            "r_multiple": r_multiple,
+        }
     finally:
         conn.close()
 

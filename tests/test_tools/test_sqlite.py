@@ -417,3 +417,82 @@ def test_trade_update_fill_rejects_already_closed_trade(db):
     conn.close()
     with pytest.raises(ValueError, match="already closed"):
         trade_update_fill(trade_id, 102.0, "order-abc")
+
+
+def test_trade_close_computes_pnl_server_side_long(db):
+    """Long trade: entry 100, exit 110, size 10, stop_loss 95 → pnl=100, risk=50, r=2.0"""
+    result = trade_open(
+        ticker="AAPL", side="buy", entry_price=100.0, size=10.0,
+        setup_type="momentum", hypothesis_id="H001",
+        rationale="test", vix_at_entry=15.0, regime="bull",
+        stop_loss=95.0,
+    )
+    trade_id = result["trade_id"]
+    trade_close(trade_id, 110.0, "hit_target")
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT outcome_pnl, r_multiple FROM trades WHERE id = ?", (trade_id,)
+    ).fetchone()
+    conn.close()
+    assert row[0] == pytest.approx(100.0)   # (110-100)*10
+    assert row[1] == pytest.approx(2.0)     # 100 / ((100-95)*10)
+
+
+def test_trade_close_computes_pnl_server_side_short(db):
+    """Short trade: entry 100, exit 90, size 10, stop_loss 105 → pnl=100, risk=50, r=2.0"""
+    result = trade_open(
+        ticker="SPY", side="sell", entry_price=100.0, size=10.0,
+        setup_type="mean_reversion", hypothesis_id="H002",
+        rationale="test", vix_at_entry=15.0, regime="bear",
+        stop_loss=105.0,
+    )
+    trade_id = result["trade_id"]
+    trade_close(trade_id, 90.0, "hit_target")
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT outcome_pnl, r_multiple FROM trades WHERE id = ?", (trade_id,)
+    ).fetchone()
+    conn.close()
+    assert row[0] == pytest.approx(100.0)   # (100-90)*10
+    assert row[1] == pytest.approx(2.0)     # 100 / ((105-100)*10)
+
+
+def test_trade_close_override_values_stored_when_provided(db):
+    """If Claude provides outcome_pnl and r_multiple, those are used as-is."""
+    result = trade_open(
+        ticker="MSFT", side="buy", entry_price=100.0, size=10.0,
+        setup_type="momentum", hypothesis_id="H003",
+        rationale="test", vix_at_entry=15.0, regime="bull",
+        stop_loss=95.0,
+    )
+    trade_id = result["trade_id"]
+    trade_close(trade_id, 105.0, "manual", outcome_pnl=42.0, r_multiple=0.84)
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT outcome_pnl, r_multiple FROM trades WHERE id = ?", (trade_id,)
+    ).fetchone()
+    conn.close()
+    assert row[0] == pytest.approx(42.0)
+    assert row[1] == pytest.approx(0.84)
+
+
+def test_trade_close_zero_risk_gives_r_zero(db):
+    """No stop_loss set → risk = 0 → r_multiple = 0.0, not a division error."""
+    result = trade_open(
+        ticker="TSLA", side="buy", entry_price=100.0, size=5.0,
+        setup_type="momentum", hypothesis_id="H004",
+        rationale="test", vix_at_entry=15.0, regime="bull",
+    )
+    trade_id = result["trade_id"]
+    trade_close(trade_id, 110.0, "hit_target")
+
+    conn = sqlite3.connect(str(db))
+    row = conn.execute(
+        "SELECT outcome_pnl, r_multiple FROM trades WHERE id = ?", (trade_id,)
+    ).fetchone()
+    conn.close()
+    assert row[0] == pytest.approx(50.0)
+    assert row[1] == pytest.approx(0.0)
