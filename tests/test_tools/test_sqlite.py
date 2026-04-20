@@ -359,3 +359,11 @@ def test_trade_open_stores_context_json(db):
     ).fetchone()
     conn.close()
     assert json.loads(row[0]) == {"rsi": 62.5, "adx": 28.0}
+
+
+def test_schema_has_alpaca_order_id_and_stop_order_id(db):
+    conn = sqlite3.connect(str(db))
+    cols = [row[1] for row in conn.execute("PRAGMA table_info(trades)").fetchall()]
+    conn.close()
+    assert "alpaca_order_id" in cols
+    assert "stop_order_id" in cols

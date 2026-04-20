@@ -40,6 +40,8 @@ CREATE TABLE IF NOT EXISTS trades (
     exit_reason   TEXT,
     strategy_version TEXT,
     context_json  TEXT,
+    alpaca_order_id TEXT,
+    stop_order_id   TEXT,
     opened_at     TEXT    NOT NULL DEFAULT (datetime('now')),
     closed_at     TEXT
 );
@@ -110,6 +112,8 @@ def bootstrap_db() -> None:
         for stmt in [
             "ALTER TABLE trades ADD COLUMN strategy_version TEXT",
             "ALTER TABLE trades ADD COLUMN context_json TEXT",
+            "ALTER TABLE trades ADD COLUMN alpaca_order_id TEXT",
+            "ALTER TABLE trades ADD COLUMN stop_order_id TEXT",
         ]:
             try:
                 conn.execute(stmt)
