@@ -745,7 +745,7 @@ class AgentCore:
         _digester=None,
         _memory: Optional[MemoryStore] = None,
     ):
-        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6")
+        self.model = model or os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001")
         self.memory = _memory or MemoryStore(db_path=db_path)
 
         if _client is not None:

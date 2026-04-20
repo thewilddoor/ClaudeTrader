@@ -116,7 +116,7 @@ def run_session_captured(session_type: str, prompt: str, session_captures: list)
 
     for iteration in range(MAX_TOOL_ITERATIONS):
         response = capturing_client.create(
-            model=os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+            model=os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
             max_tokens=8192,
             system=system,
             tools=TOOL_SCHEMAS,
@@ -288,7 +288,7 @@ def main():
             "date": today,
             "started_at": now.isoformat(),
             "completed_at": datetime.now(ET).isoformat(),
-            "model": os.environ.get("ANTHROPIC_MODEL", "claude-sonnet-4-6"),
+            "model": os.environ.get("ANTHROPIC_MODEL", "claude-haiku-4-5-20251001"),
         },
         "sessions": results,
     }
