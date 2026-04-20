@@ -72,26 +72,42 @@ observations: Rolling field notes. Max 15 bullets. Format: [YYYY-MM-DD] Text in 
 3. For each planned trade:
    a. fmp_check_current_price(ticker) — verify price is within entry zone. If outside zone, skip.
    b. Compute shares via sizing formula from strategy_doc
-   c. trade_open(...) FIRST — get trade_id
-   d. alpaca_place_order(...)
-   e. alpaca_list_orders(status="closed") — confirm fill. If not filled/rejected: trade_close(trade_id, 0, "order_failed", 0, 0)
-   f. hypothesis_log(id, "testing", f"Opened trade_id {trade_id} at {fill_price}")
+   c. trade_open(...)  → get trade_id
+   d. alpaca_place_order(symbol, qty, side, order_type="market")
+   e. alpaca_list_orders(status="closed") → confirm fill, get filled_avg_price + alpaca order_id
+      If not filled or rejected: trade_close(trade_id, 0, "order_failed") immediately.
+   f. trade_update_fill(trade_id, filled_avg_price, alpaca_order_id)
+   g. alpaca_place_order(symbol, qty, opposite_side, order_type="stop",
+                         stop_price=stop_loss, time_in_force="gtc")
+      → store the returned stop order_id in today_context alongside trade_id
+      (For longs, opposite_side="sell". For shorts, opposite_side="buy".)
+   h. hypothesis_log(id, "testing", f"Opened trade_id {trade_id} at {filled_avg_price}")
 4. Do NOT call fmp_ta at market_open — the pre_market analysis is authoritative. fmp_check_current_price is sufficient.
 
-CRITICAL: trade_open MUST be called BEFORE alpaca_place_order. If the order fails after trade_open succeeds, call trade_close(trade_id, 0, "order_failed", 0, 0) immediately to prevent an orphaned open record. If trade_open fails, do not place the order.
+CRITICAL: trade_open MUST be called BEFORE alpaca_place_order. If the order fails after trade_open succeeds, call trade_close(trade_id, 0, "order_failed") immediately to prevent an orphaned open record. If trade_open fails, do not place the order.
 No proposed_change in market_open — system rejects it.
 
 ### health_check (1:00 PM ET)
 1. Review positions from recent_context
 2. For each position: is the thesis still intact?
 3. Close if: stop hit, thesis invalidated by news/structure, or cannot state why trade is still valid
-   Close sequence: alpaca_place_order -> trade_close -> hypothesis_log update
+   Close sequence: see Manual Close Protocol below
 4. Seek new setups only if buying_power > 0 AND positions < 5 AND clear setup exists in watchlist.
    CRITICAL: If entering a new position at health_check, you MUST call fmp_ta(ticker) first to get
      fresh indicator values for that session. Do NOT reuse indicator values from pre_market memory,
      estimate them, or populate context_json from recollection. Every context_json field must
      come from an fmp_ta call made during this health_check session.
 No proposed_change in health_check — system rejects it.
+
+### Manual Close Protocol (health_check and EOD)
+Before closing any position manually:
+1. Retrieve stop_order_id for this trade from today_context
+2. alpaca_cancel_order(stop_order_id) — cancel the standing GTC stop
+   If this returns an error, the stop already filled intraday. Treat this as:
+   "stop was hit — record trade_close using stop_loss price as exit_price, exit_reason='stop_hit'"
+   and skip placing a market order (position is already flat).
+3. alpaca_place_order(symbol, qty, opposite_side, order_type="market") — exit the position
+4. trade_close(trade_id, exit_price, exit_reason)
 
 ### eod_reflection (3:45 PM ET)
 1. Close remaining open positions (unless overnight hold explicitly justified in today_context)
@@ -362,8 +378,29 @@ TOOL_SCHEMAS = [
         },
     },
     {
+        "name": "trade_update_fill",
+        "description": (
+            "Update entry_price and alpaca_order_id with actual fill data from Alpaca. "
+            "Call AFTER alpaca_list_orders confirms the entry order filled, "
+            "BEFORE placing the GTC stop order."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "trade_id": {"type": "integer"},
+                "filled_avg_price": {"type": "number"},
+                "alpaca_order_id": {"type": "string"},
+            },
+            "required": ["trade_id", "filled_avg_price", "alpaca_order_id"],
+        },
+    },
+    {
         "name": "trade_close",
-        "description": "Stamp exit fields onto an open trade after the exit order fills.",
+        "description": (
+            "Stamp exit fields onto an open trade after the exit order fills. "
+            "P&L is computed server-side — do NOT pass outcome_pnl or r_multiple "
+            "unless you have a specific override reason."
+        ),
         "input_schema": {
             "type": "object",
             "properties": {
@@ -373,7 +410,7 @@ TOOL_SCHEMAS = [
                 "outcome_pnl": {"type": "number"},
                 "r_multiple": {"type": "number"},
             },
-            "required": ["trade_id", "exit_price", "exit_reason", "outcome_pnl", "r_multiple"],
+            "required": ["trade_id", "exit_price", "exit_reason"],
         },
     },
     {
@@ -611,7 +648,7 @@ TOOL_SCHEMAS = [
 
 
 def _build_tool_functions() -> dict:
-    from scheduler.tools.sqlite import trade_open, trade_close, hypothesis_log, trade_query
+    from scheduler.tools.sqlite import trade_open, trade_close, trade_update_fill, hypothesis_log, trade_query
     from scheduler.tools.alpaca import (
         alpaca_get_account, alpaca_get_positions, alpaca_place_order,
         alpaca_list_orders, alpaca_cancel_order,
@@ -624,6 +661,7 @@ def _build_tool_functions() -> dict:
     from scheduler.tools.pyexec import run_script
     return {
         "trade_open": trade_open,
+        "trade_update_fill": trade_update_fill,
         "trade_close": trade_close,
         "hypothesis_log": hypothesis_log,
         "trade_query": trade_query,

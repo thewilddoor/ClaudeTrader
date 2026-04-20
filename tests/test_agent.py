@@ -218,7 +218,7 @@ def test_tool_schemas_covers_all_tools():
     from scheduler.agent import TOOL_SCHEMAS
     names = {t["name"] for t in TOOL_SCHEMAS}
     required = {
-        "trade_open", "trade_close", "hypothesis_log", "trade_query",
+        "trade_open", "trade_update_fill", "trade_close", "hypothesis_log", "trade_query",
         "alpaca_get_account", "alpaca_get_positions", "alpaca_place_order",
         "alpaca_list_orders", "alpaca_cancel_order",
         "fmp_screener",
@@ -293,3 +293,39 @@ def test_run_session_update_memory_block_rejects_strategy_doc(mem_db):
 
     # strategy_doc must NOT have been overwritten
     assert mem_db.read("strategy_doc") == "test strategy"
+
+
+def test_trade_update_fill_in_tool_schemas():
+    from scheduler.agent import TOOL_SCHEMAS
+    names = [t["name"] for t in TOOL_SCHEMAS]
+    assert "trade_update_fill" in names
+
+
+def test_trade_update_fill_schema_has_required_fields():
+    from scheduler.agent import TOOL_SCHEMAS
+    schema = next(t for t in TOOL_SCHEMAS if t["name"] == "trade_update_fill")
+    props = schema["input_schema"]["properties"]
+    required = schema["input_schema"]["required"]
+    assert "trade_id" in props
+    assert "filled_avg_price" in props
+    assert "alpaca_order_id" in props
+    assert set(required) == {"trade_id", "filled_avg_price", "alpaca_order_id"}
+
+
+def test_trade_close_schema_outcome_pnl_and_r_multiple_not_required():
+    from scheduler.agent import TOOL_SCHEMAS
+    schema = next(t for t in TOOL_SCHEMAS if t["name"] == "trade_close")
+    required = schema["input_schema"]["required"]
+    assert "outcome_pnl" not in required
+    assert "r_multiple" not in required
+    # Still present as properties (for optional override)
+    props = schema["input_schema"]["properties"]
+    assert "outcome_pnl" in props
+    assert "r_multiple" in props
+
+
+def test_trade_update_fill_in_build_tool_functions():
+    from scheduler.agent import _build_tool_functions
+    fns = _build_tool_functions()
+    assert "trade_update_fill" in fns
+    assert callable(fns["trade_update_fill"])
