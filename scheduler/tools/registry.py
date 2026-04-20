@@ -25,6 +25,7 @@ from scheduler.tools.alpaca import (
 from scheduler.tools.sqlite import (
     trade_open,
     trade_close,
+    trade_update_fill,
     hypothesis_log,
     trade_query,
 )
@@ -44,6 +45,7 @@ ALL_TOOLS = [
     alpaca_cancel_order,
     trade_open,
     trade_close,
+    trade_update_fill,
     hypothesis_log,
     trade_query,
 ]
